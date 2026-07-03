@@ -1,37 +1,19 @@
-# Settings Page Implementation Plan
+# Settings 页面实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+## 目标
 
-**Goal:** Add a lightweight Settings page that edits PulseBoard `.env` configuration for personal use.
+增加轻量 Settings 页面，用于个人环境下直接修改 PulseBoard 的 `.env` 配置。
 
-**Architecture:** Backend exposes `/api/settings` for masked config read and selected `.env` writes. Frontend adds a top-level Settings tab with simple forms for General, GPU, VPS, and LLM source basics.
+## 主要任务
 
-**Tech Stack:** FastAPI, pydantic, React, Vite, existing CSS.
+1. 后端增加 `/api/settings`，支持读取配置和保存允许修改的字段。
+2. 密钥字段只返回是否已配置，不回显真实值。
+3. 前端增加 `Settings` 顶部 Tab。
+4. Settings 页面按 General、GPU、VPS、LLM、Secrets 分组。
+5. 保存后写入 `.env` 并清理后端 settings cache。
 
----
+## 验证
 
-### Task 1: Backend Settings API
-
-**Files:**
-- Create: `backend/app/settings_config.py`
-- Modify: `backend/app/routes.py`
-- Test: `backend/tests/test_settings_config.py`
-
-- [ ] Add tests for reading masked settings and writing `.env`.
-- [ ] Implement `.env` read/write helpers and allowed setting keys.
-- [ ] Add `GET /api/settings` and `POST /api/settings`.
-- [ ] Clear FastAPI settings cache after saving.
-
-### Task 2: Frontend Settings Page
-
-**Files:**
-- Modify: `frontend/src/api.js`
-- Modify: `frontend/src/App.jsx`
-- Create: `frontend/src/components/SettingsView.jsx`
-- Modify: `frontend/src/styles.css`
-
-- [ ] Add API helpers.
-- [ ] Add top-level Settings tab.
-- [ ] Render grouped forms.
-- [ ] Save changes through `/api/settings`.
-- [ ] Run backend tests and frontend build.
+- 后端测试
+- 前端构建
+- 手动访问 `/api/settings`，确认不泄露密钥

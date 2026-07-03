@@ -136,7 +136,7 @@ export function LlmUsageView() {
             {form.source_type === 'newapi_admin' && (
               <label>
                 <span>Base URL</span>
-                <input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://academicedu.me" />
+                <input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://your-new-api.example.com" />
               </label>
             )}
             {form.source_type === 'deepseek_balance' ? (

@@ -19,7 +19,7 @@ services:
       context: ./backend
     environment:
       PULSEBOARD_DATABASE_URL: mysql+pymysql://root:pulseboard@mysql:3306/pulseboard?charset=utf8mb4
-      PULSEBOARD_SOURCE_URL: ${PULSEBOARD_SOURCE_URL:-http://100.64.0.14:8080/api/latest}
+      PULSEBOARD_SOURCE_URL: ${PULSEBOARD_SOURCE_URL:-http://YOUR_GPU_API_HOST:PORT/api/latest}
       PULSEBOARD_COLLECTION_INTERVAL_SECONDS: 15
       PULSEBOARD_RETENTION_DAYS: 30
     ports:

@@ -4,7 +4,7 @@ param(
     [string]$DbUser = "root",
     [string]$DbPassword = "",
     [string]$Database = "pulseboard",
-    [string]$SourceUrl = "http://100.64.0.14:8080/api/latest",
+    [string]$SourceUrl = "http://YOUR_GPU_API_HOST:PORT/api/latest",
     [string]$NodeExporters = ""
 )
 
@@ -42,7 +42,7 @@ PULSEBOARD_NODE_EXPORTERS=$NodeExporters
 PULSEBOARD_NODE_EXPORTER_INTERVAL_SECONDS=30
 PULSEBOARD_TRAFFIC_QUOTA_NODE=vpn-gateway
 PULSEBOARD_TRAFFIC_QUOTA_TOTAL_GB=250
-PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB=71.23
+PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB=0
 PULSEBOARD_TRAFFIC_QUOTA_RESET_DAY=18
 "@ | Set-Content -Encoding ASCII (Join-Path $Root ".env")
 

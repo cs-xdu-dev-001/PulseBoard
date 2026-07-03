@@ -9,7 +9,7 @@ def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path, monkeypatch
     env_path = Path("C:/Users/z2986/Desktop/PulseBoard/.env")
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_TYPE", "newapi_admin")
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME", "Academic Gateway")
-    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_BASE_URL", "https://academicedu.me")
+    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_BASE_URL", "https://new-api.example.com")
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN", "secret")
 
     settings = Settings(llm_usage_sources="academic")
@@ -18,7 +18,7 @@ def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path, monkeypatch
     assert env_path.name == ".env"
     assert configs[0].source_id == "academic"
     assert configs[0].display_name == "Academic Gateway"
-    assert configs[0].base_url == "https://academicedu.me"
+    assert configs[0].base_url == "https://new-api.example.com"
     assert configs[0].access_token == "secret"
 
 

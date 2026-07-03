@@ -1,96 +1,46 @@
-# PulseBoard MVP 2 Design
+# PulseBoard VPS 监控设计
 
-## Goal
+## 目标
 
-Add Linux VPS monitoring to PulseBoard using standard `node_exporter` endpoints. PulseBoard will pull Prometheus metrics, store 30 days of history, show VPS status on the existing dashboard, and fix the existing lab GPU timestamp offset.
+通过标准 `node_exporter` 采集 VPS 性能指标，在 PulseBoard 中展示 VPS 健康状态、网络速率和 VPN 流量配额。
 
-## Scope
+## 范围
 
-In scope:
-- Configure VPS node_exporter targets in `.env`.
-- Pull node_exporter metrics every 30 seconds.
-- Parse CPU, memory, disk, network, load average, uptime, and exporter reachability.
-- Store normalized VPS metrics in MySQL.
-- Show a unified infrastructure summary, GPU section, VPS section, and history charts.
-- Track monthly traffic quota for one VPN gateway VPS.
-- Interpret naive lab GPU timestamps as Asia/Shanghai time before storing UTC.
+包含：
 
-Out of scope:
-- Custom VPS agent.
-- SSH-based collection.
-- node_exporter install automation.
-- VPS target management UI.
-- Login, alerts, LLM tracing.
+- 从 `.env` 配置 node_exporter 目标。
+- 每 30 秒采集 CPU、内存、磁盘、网络、Load、Uptime。
+- 对一个指定 VPS 统计每月流量配额。
+- 将 VPS 卡片和历史曲线接入 Infra 页面。
 
-## Configuration
+不包含：
 
-```text
-PULSEBOARD_NODE_EXPORTERS=vpn-gateway=http://1.2.3.4:9100,vps-us=http://5.6.7.8:9100
+- 自定义 agent。
+- SSH 采集。
+- node_exporter 自动安装。
+- 告警。
+
+## 配置示例
+
+```env
+PULSEBOARD_NODE_EXPORTERS=vpn-gateway=http://YOUR_VPN_VPS_IP:9100,app-server=http://YOUR_APP_SERVER_IP:9100
 PULSEBOARD_NODE_EXPORTER_INTERVAL_SECONDS=30
 PULSEBOARD_TRAFFIC_QUOTA_NODE=vpn-gateway
 PULSEBOARD_TRAFFIC_QUOTA_TOTAL_GB=250
-PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB=71.23
+PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB=0
 PULSEBOARD_TRAFFIC_QUOTA_RESET_DAY=18
 ```
 
-`PULSEBOARD_NODE_EXPORTERS` starts in `.env` for MVP 2. Later it can move to a database-backed settings page.
+## 指标口径
 
-## Metrics
+- CPU：根据 `node_cpu_seconds_total` 的采样差值计算。
+- 内存：使用 `MemTotal - MemAvailable`。
+- 磁盘：过滤虚拟文件系统，只保留真实挂载点。
+- 网络：过滤 `lo`、Docker、veth、tun、tap 等接口。
+- 流量配额：按服务商常用十进制 GB 计算，`1 GB = 1,000,000,000 bytes`。
 
-CPU:
-- Parse `node_cpu_seconds_total`.
-- CPU usage is calculated from deltas between samples, excluding `idle`, `iowait`, and `steal`.
+## 状态规则
 
-Memory:
-- Parse `node_memory_MemTotal_bytes`, `node_memory_MemAvailable_bytes`.
-- Usage percent is `(total - available) / total * 100`.
-
-Disk:
-- Parse `node_filesystem_size_bytes`, `node_filesystem_avail_bytes`, `node_filesystem_readonly`.
-- Exclude virtual filesystems such as tmpfs, devtmpfs, overlay, squashfs, proc, sysfs, cgroup, nsfs, ramfs, autofs.
-- Store all real mount points. The card highlights any real mount over 85%.
-
-Network:
-- Parse `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`.
-- Exclude `lo`, `docker*`, `veth*`, `br-*`, `tun*`, `tap*`.
-- Store per-interface bytes/s and aggregate total inbound/outbound bytes/s.
-
-Load and uptime:
-- Parse `node_load1`, `node_load5`, `node_load15`.
-- Parse `node_time_seconds - node_boot_time_seconds`.
-
-Traffic quota:
-- Applies only to `vpn-gateway`.
-- Total quota is 250 GB.
-- Initial used quota is 71.23 GB.
-- Reset day is the 18th of each month.
-- Usage after setup is estimated from aggregate network byte deltas and added to the configured initial value.
-
-## Status Rules
-
-VPS status:
-- `offline`: node_exporter fetch fails.
-- `critical`: CPU > 90%, memory > 90%, or any real disk > 85%.
-- `online`: reachable and no critical threshold is exceeded.
-
-## Dashboard
-
-Homepage structure:
-- Unified infrastructure summary at the top.
-- GPU monitoring section.
-- VPS monitoring section.
-- History charts for GPU and VPS.
-
-VPS card fields:
-- CPU %
-- Memory %
-- Disk summary
-- Network inbound/outbound
-- Load average
-- Uptime
-- Traffic quota, only for `vpn-gateway`
-
-## Time Handling Fix
-
-Database continues to store UTC. Lab GPU API timestamps without timezone are interpreted as Asia/Shanghai before conversion to UTC. Frontend displays local time.
-
+- `offline`：node_exporter 不可达。
+- `critical`：CPU > 90%、内存 > 90%、任一真实磁盘 > 85%。
+- `online`：可达且未触发异常阈值。
