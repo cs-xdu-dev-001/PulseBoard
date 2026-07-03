@@ -1,10 +1,10 @@
 # PulseBoard
 
-PulseBoard 是一个个人用的资源监控看板，用来查看实验室 GPU、VPS 状态、VPN 流量配额，以及 LLM 账户余额和用量。
+PulseBoard 是一个个人用的资源监控看板，用来查看服务器 GPU、VPS 状态、VPN 流量配额，以及 LLM 账户余额和用量。
 
 ## 功能
 
-- 实验室 GPU 可用性监控
+- 服务器 GPU 可用性监控
 - VPS CPU、内存、磁盘、网络、流量配额监控
 - LLM 余额、调用量、费用估算
 - Infra / LLM / Settings 三个页面
