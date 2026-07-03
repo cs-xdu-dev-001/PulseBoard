@@ -10,7 +10,7 @@ const ranges = [
 
 const modelColors = ['#7c3aed', '#22c55e', '#f97316', '#38bdf8', '#2563eb', '#f43f5e']
 
-export function LlmUsageView() {
+export function LlmUsageView({ theme = 'dark' }) {
   const [range, setRange] = useState('today')
   const [source, setSource] = useState('')
   const [sources, setSources] = useState([])
@@ -188,8 +188,8 @@ export function LlmUsageView() {
       </div>
 
       <div className="llm-chart-stack">
-        <AreaChart title="消耗分布" total={formatUsd(summary?.estimated_cost_usd)} series={series?.model_series || []} metric="estimated_cost_usd" formatter={formatUsd} />
-        <AreaChart title="请求趋势" series={series?.series || []} metric="request_count" formatter={formatNumber} compact />
+        <AreaChart title="消耗分布" total={formatUsd(summary?.estimated_cost_usd)} series={series?.model_series || []} metric="estimated_cost_usd" formatter={formatUsd} theme={theme} />
+        <AreaChart title="请求趋势" series={series?.series || []} metric="request_count" formatter={formatNumber} compact theme={theme} />
       </div>
 
       <ModelTable models={models} />
@@ -266,9 +266,32 @@ function ModelTable({ models }) {
   )
 }
 
-function AreaChart({ title, total, series, metric, formatter, compact = false }) {
+function AreaChart({ title, total, series, metric, formatter, compact = false, theme = 'dark' }) {
   const ref = useRef(null)
   const option = useMemo(() => {
+    const palette = theme === 'light'
+      ? {
+          title: '#0f2233',
+          legend: '#536a7f',
+          axis: '#5d7286',
+          axisLine: 'rgba(15, 34, 51, 0.14)',
+          splitLine: 'rgba(15, 34, 51, 0.08)',
+          tooltipBg: 'rgba(248, 252, 255, 0.96)',
+          tooltipBorder: 'rgba(0, 166, 126, 0.24)',
+          tooltipText: '#0f2233',
+          areaEnd: 'rgba(248,252,255,0)',
+        }
+      : {
+          title: '#e8fbff',
+          legend: '#9aa7b8',
+          axis: '#94a3b8',
+          axisLine: 'rgba(148, 163, 184, 0.22)',
+          splitLine: 'rgba(148, 163, 184, 0.12)',
+          tooltipBg: 'rgba(7, 12, 24, 0.94)',
+          tooltipBorder: 'rgba(139, 220, 255, 0.18)',
+          tooltipText: '#effcff',
+          areaEnd: 'rgba(0,0,0,0)',
+        }
     const chartSeries = (series || []).map((item, index) => {
       const color = modelColors[index % modelColors.length]
       return {
@@ -282,7 +305,7 @@ function AreaChart({ title, total, series, metric, formatter, compact = false })
           opacity: compact ? 0.12 : 0.18,
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color },
-            { offset: 1, color: 'rgba(0,0,0,0)' },
+            { offset: 1, color: palette.areaEnd },
           ]),
         },
         emphasis: { focus: 'series' },
@@ -296,14 +319,14 @@ function AreaChart({ title, total, series, metric, formatter, compact = false })
         text: total ? `${title}  总计：${total}` : title,
         left: 24,
         top: 18,
-        textStyle: { color: '#e8fbff', fontSize: 16, fontWeight: 800 },
+        textStyle: { color: palette.title, fontSize: 16, fontWeight: 800 },
       },
       tooltip: {
         trigger: 'axis',
         confine: true,
-        backgroundColor: 'rgba(7, 12, 24, 0.94)',
-        borderColor: 'rgba(139, 220, 255, 0.18)',
-        textStyle: { color: '#effcff' },
+        backgroundColor: palette.tooltipBg,
+        borderColor: palette.tooltipBorder,
+        textStyle: { color: palette.tooltipText },
         valueFormatter: (value) => formatter(value),
       },
       legend: {
@@ -312,25 +335,25 @@ function AreaChart({ title, total, series, metric, formatter, compact = false })
         icon: 'rect',
         itemWidth: 10,
         itemHeight: 10,
-        textStyle: { color: '#9aa7b8', fontSize: 12 },
+        textStyle: { color: palette.legend, fontSize: 12 },
       },
       grid: { left: 64, right: 30, bottom: compact ? 64 : 72, top: 70 },
       xAxis: {
         type: 'time',
         boundaryGap: false,
-        axisLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.22)' } },
+        axisLine: { lineStyle: { color: palette.axisLine } },
         axisTick: { show: false },
-        axisLabel: { color: '#94a3b8' },
+        axisLabel: { color: palette.axis },
         splitLine: { show: false },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#94a3b8' },
-        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } },
+        axisLabel: { color: palette.axis },
+        splitLine: { lineStyle: { color: palette.splitLine } },
       },
       series: chartSeries,
     }
-  }, [title, total, series, metric, formatter, compact])
+  }, [title, total, series, metric, formatter, compact, theme])
 
   useEffect(() => {
     if (!ref.current) return

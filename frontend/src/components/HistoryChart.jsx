@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as echarts from 'echarts'
 
-export function HistoryChart({ title, data, metric, unit, kind = 'gpu' }) {
+export function HistoryChart({ title, data, metric, unit, kind = 'gpu', theme = 'dark' }) {
   const ref = useRef(null)
-  const option = useMemo(() => buildOption(title, data, metric, unit, kind), [title, data, metric, unit, kind])
+  const option = useMemo(() => buildOption(title, data, metric, unit, kind, theme), [title, data, metric, unit, kind, theme])
 
   useEffect(() => {
     if (!ref.current) return
@@ -20,7 +20,28 @@ export function HistoryChart({ title, data, metric, unit, kind = 'gpu' }) {
   return <div className="chart-card"><div ref={ref} className="chart" /></div>
 }
 
-function buildOption(title, data, metric, unit, kind) {
+function buildOption(title, data, metric, unit, kind, theme) {
+  const palette = theme === 'light'
+    ? {
+        title: '#0f2233',
+        text: '#375066',
+        axis: '#5d7286',
+        axisLine: 'rgba(15, 34, 51, 0.14)',
+        splitLine: 'rgba(15, 34, 51, 0.08)',
+        tooltipBg: 'rgba(248, 252, 255, 0.96)',
+        tooltipBorder: 'rgba(0, 166, 126, 0.28)',
+        tooltipText: '#0f2233',
+      }
+    : {
+        title: '#e8fbff',
+        text: '#8fa6b8',
+        axis: '#7890a3',
+        axisLine: 'rgba(255,255,255,0.12)',
+        splitLine: 'rgba(255,255,255,0.06)',
+        tooltipBg: 'rgba(7, 12, 24, 0.92)',
+        tooltipBorder: 'rgba(57, 255, 157, 0.35)',
+        tooltipText: '#effcff',
+      }
   const series = (data?.series || []).map((item) => ({
     name: kind === 'gpu' ? `${item.machine_name} GPU${item.gpu_index}` : item.name,
     type: 'line',
@@ -37,15 +58,15 @@ function buildOption(title, data, metric, unit, kind) {
       text: title,
       left: 12,
       top: 10,
-      textStyle: { color: '#e8fbff', fontSize: 14, fontWeight: 700 }
+      textStyle: { color: palette.title, fontSize: 14, fontWeight: 700 }
     },
     color: ['#39ff9d', '#22d3ee', '#ff4fd8', '#f59e0b', '#818cf8'],
     tooltip: {
       trigger: 'axis',
       confine: true,
-      backgroundColor: 'rgba(7, 12, 24, 0.92)',
-      borderColor: 'rgba(57, 255, 157, 0.35)',
-      textStyle: { color: '#effcff' },
+      backgroundColor: palette.tooltipBg,
+      borderColor: palette.tooltipBorder,
+      textStyle: { color: palette.tooltipText },
       axisPointer: { label: { formatter: (params) => formatDateTime(params.value) } },
       valueFormatter: (value) => value == null ? '--' : formatValue(value, unit)
     },
@@ -53,22 +74,22 @@ function buildOption(title, data, metric, unit, kind) {
       top: 38,
       left: 10,
       right: 10,
-      textStyle: { color: '#8fa6b8', fontSize: 11 }
+      textStyle: { color: palette.text, fontSize: 11 }
     },
     grid: { left: 44, right: 18, bottom: 32, top: 78 },
     xAxis: {
       type: 'time',
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.12)' } },
+      axisLine: { lineStyle: { color: palette.axisLine } },
       axisLabel: {
-        color: '#7890a3',
+        color: palette.axis,
         formatter: (value) => formatAxisTime(value)
       },
       splitLine: { show: false }
     },
     yAxis: {
       type: 'value',
-      axisLabel: { color: '#7890a3' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }
+      axisLabel: { color: palette.axis },
+      splitLine: { lineStyle: { color: palette.splitLine } }
     },
     series
   }

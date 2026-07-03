@@ -8,6 +8,14 @@ import { LlmUsageView } from './components/LlmUsageView.jsx'
 import { SettingsView } from './components/SettingsView.jsx'
 
 const refreshMs = 15000
+const themeStorageKey = 'pulseboard-theme'
+
+function getInitialTheme() {
+  if (typeof window === 'undefined') return 'dark'
+  const saved = window.localStorage.getItem(themeStorageKey)
+  if (saved === 'dark' || saved === 'light') return saved
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}
 
 export default function App() {
   const [dashboard, setDashboard] = useState(null)
@@ -16,7 +24,13 @@ export default function App() {
   const [vpsHistory, setVpsHistory] = useState(null)
   const [range, setRange] = useState('1h')
   const [activeTab, setActiveTab] = useState('infra')
+  const [theme, setTheme] = useState(getInitialTheme)
   const [error, setError] = useState(null)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem(themeStorageKey, theme)
+  }, [theme])
 
   useEffect(() => {
     let active = true
@@ -84,6 +98,17 @@ export default function App() {
           <h1>Infrastructure Console</h1>
         </div>
         <div className="topbar-actions">
+          <button
+            className="theme-toggle"
+            type="button"
+            aria-label={theme === 'dark' ? '切换到日间模式' : '切换到夜间模式'}
+            aria-pressed={theme === 'light'}
+            onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')}
+          >
+            <span className="theme-icon sun" />
+            <span className="theme-icon moon" />
+            <span className="theme-knob" />
+          </button>
           <div className="segmented">
             <button className={activeTab === 'infra' ? 'active' : ''} onClick={() => setActiveTab('infra')}>Infra</button>
             <button className={activeTab === 'llm' ? 'active' : ''} onClick={() => setActiveTab('llm')}>LLM</button>
@@ -99,7 +124,7 @@ export default function App() {
       {error && <section className="notice danger">API 请求失败：{error}</section>}
 
       {activeTab === 'llm' ? (
-        <LlmUsageView />
+        <LlmUsageView theme={theme} />
       ) : activeTab === 'settings' ? (
         <SettingsView />
       ) : (
@@ -110,13 +135,14 @@ export default function App() {
           vpsHistory={vpsHistory}
           range={range}
           setRange={setRange}
+          theme={theme}
         />
       )}
     </main>
   )
 }
 
-function InfraView({ dashboard, gpuHistory, machineHistory, vpsHistory, range, setRange }) {
+function InfraView({ dashboard, gpuHistory, machineHistory, vpsHistory, range, setRange, theme }) {
   const [infraTab, setInfraTab] = useState('overview')
   const gpus = dashboard?.gpus || []
   const vpsNodes = dashboard?.vps_nodes || []
@@ -157,10 +183,10 @@ function InfraView({ dashboard, gpuHistory, machineHistory, vpsHistory, range, s
           trafficNode={trafficNode}
         />
       )}
-      {infraTab === 'gpu' && <GpuPanel dashboard={dashboard} gpuHistory={gpuHistory} range={range} setRange={setRange} />}
-      {infraTab === 'vps' && <VpsPanel dashboard={dashboard} vpsHistory={vpsHistory} range={range} setRange={setRange} />}
+      {infraTab === 'gpu' && <GpuPanel dashboard={dashboard} gpuHistory={gpuHistory} range={range} setRange={setRange} theme={theme} />}
+      {infraTab === 'vps' && <VpsPanel dashboard={dashboard} vpsHistory={vpsHistory} range={range} setRange={setRange} theme={theme} />}
       {infraTab === 'machines' && (
-        <MachinesPanel dashboard={dashboard} machineHistory={machineHistory} range={range} setRange={setRange} />
+        <MachinesPanel dashboard={dashboard} machineHistory={machineHistory} range={range} setRange={setRange} theme={theme} />
       )}
     </>
   )
@@ -200,7 +226,7 @@ function InfraOverview({ dashboard, gpus, vpsNodes, abnormalVps, trafficNode }) 
   )
 }
 
-function GpuPanel({ dashboard, gpuHistory, range, setRange }) {
+function GpuPanel({ dashboard, gpuHistory, range, setRange, theme }) {
   return (
     <>
       <section className="section-heading">
@@ -215,14 +241,14 @@ function GpuPanel({ dashboard, gpuHistory, range, setRange }) {
         {!dashboard && <SkeletonCards count={3} />}
       </section>
       <HistorySection range={range} setRange={setRange}>
-        <HistoryChart title="GPU 利用率" data={gpuHistory} metric="utilization" unit="%" />
-        <HistoryChart title="GPU 显存占用" data={gpuHistory} metric="memory_used_mb" unit="MB" />
+        <HistoryChart title="GPU 利用率" data={gpuHistory} metric="utilization" unit="%" theme={theme} />
+        <HistoryChart title="GPU 显存占用" data={gpuHistory} metric="memory_used_mb" unit="MB" theme={theme} />
       </HistorySection>
     </>
   )
 }
 
-function VpsPanel({ dashboard, vpsHistory, range, setRange }) {
+function VpsPanel({ dashboard, vpsHistory, range, setRange, theme }) {
   return (
     <>
       <section className="section-heading">
@@ -236,17 +262,17 @@ function VpsPanel({ dashboard, vpsHistory, range, setRange }) {
         {(dashboard?.vps_nodes || []).map((node) => <VpsCard key={node.id} node={node} />)}
       </section>
       <HistorySection range={range} setRange={setRange}>
-        <HistoryChart title="VPS CPU" data={vpsHistory} metric="cpu_percent" unit="%" kind="node" />
-        <HistoryChart title="VPS 内存" data={vpsHistory} metric="memory_percent" unit="%" kind="node" />
-        <HistoryChart title="VPS 入站速率" data={vpsHistory} metric="network_rx_bytes_per_sec" unit="B/s" kind="node" />
-        <HistoryChart title="VPS 出站速率" data={vpsHistory} metric="network_tx_bytes_per_sec" unit="B/s" kind="node" />
-        <HistoryChart title="流量配额使用率" data={vpsHistory} metric="traffic_used_percent" unit="%" kind="node" />
+        <HistoryChart title="VPS CPU" data={vpsHistory} metric="cpu_percent" unit="%" kind="node" theme={theme} />
+        <HistoryChart title="VPS 内存" data={vpsHistory} metric="memory_percent" unit="%" kind="node" theme={theme} />
+        <HistoryChart title="VPS 入站速率" data={vpsHistory} metric="network_rx_bytes_per_sec" unit="B/s" kind="node" theme={theme} />
+        <HistoryChart title="VPS 出站速率" data={vpsHistory} metric="network_tx_bytes_per_sec" unit="B/s" kind="node" theme={theme} />
+        <HistoryChart title="流量配额使用率" data={vpsHistory} metric="traffic_used_percent" unit="%" kind="node" theme={theme} />
       </HistorySection>
     </>
   )
 }
 
-function MachinesPanel({ dashboard, machineHistory, range, setRange }) {
+function MachinesPanel({ dashboard, machineHistory, range, setRange, theme }) {
   return (
     <>
       <section className="section-heading">
@@ -259,8 +285,8 @@ function MachinesPanel({ dashboard, machineHistory, range, setRange }) {
         {(dashboard?.machines || []).map((machine) => <MachineCard key={machine.id} machine={machine} />)}
       </section>
       <HistorySection range={range} setRange={setRange}>
-        <HistoryChart title="实验室机器 CPU" data={machineHistory} metric="cpu_percent" unit="%" kind="machine" />
-        <HistoryChart title="实验室机器内存" data={machineHistory} metric="memory_percent" unit="%" kind="machine" />
+        <HistoryChart title="实验室机器 CPU" data={machineHistory} metric="cpu_percent" unit="%" kind="machine" theme={theme} />
+        <HistoryChart title="实验室机器内存" data={machineHistory} metric="memory_percent" unit="%" kind="machine" theme={theme} />
       </HistorySection>
     </>
   )
