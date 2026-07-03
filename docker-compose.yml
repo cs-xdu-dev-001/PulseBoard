@@ -1,0 +1,40 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: pulseboard
+      MYSQL_ROOT_PASSWORD: pulseboard
+    ports:
+      - "3306:3306"
+    volumes:
+      - pulseboard_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ppulseboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      PULSEBOARD_DATABASE_URL: mysql+pymysql://root:pulseboard@mysql:3306/pulseboard?charset=utf8mb4
+      PULSEBOARD_SOURCE_URL: ${PULSEBOARD_SOURCE_URL:-http://100.64.0.14:8080/api/latest}
+      PULSEBOARD_COLLECTION_INTERVAL_SECONDS: 15
+      PULSEBOARD_RETENTION_DAYS: 30
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8088:80"
+    depends_on:
+      - backend
+
+volumes:
+  pulseboard_mysql:
