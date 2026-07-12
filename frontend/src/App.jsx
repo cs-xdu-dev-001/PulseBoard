@@ -8,6 +8,7 @@ import { LlmUsageView } from './components/LlmUsageView.jsx'
 import { SettingsView } from './components/SettingsView.jsx'
 
 const refreshMs = 15000
+const historyRefreshMs = 30000
 const themeStorageKey = 'pulseboard-theme'
 
 function getInitialTheme() {
@@ -74,8 +75,10 @@ export default function App() {
       }
     }
     loadHistory()
+    const timer = setInterval(loadHistory, historyRefreshMs)
     return () => {
       active = false
+      clearInterval(timer)
     }
   }, [range])
 
