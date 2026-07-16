@@ -4,7 +4,7 @@ from app.settings_config import load_app_settings, save_app_settings
 
 
 def test_load_app_settings_masks_secret_values(tmp_path):
-    env_path = tmp_path / ".env"
+    env_path = tmp_path / "test.env"
     env_path.write_text(
         "\n".join(
             [
@@ -26,7 +26,7 @@ def test_load_app_settings_masks_secret_values(tmp_path):
 
 
 def test_save_app_settings_updates_allowed_keys_without_blank_secret_overwrite(tmp_path):
-    env_path = tmp_path / ".env"
+    env_path = tmp_path / "test.env"
     env_path.write_text(
         "PULSEBOARD_SOURCE_URL=http://old\nPULSEBOARD_LLM_DEEPSEEK_API_KEY=secret\n",
         encoding="utf-8",
@@ -45,3 +45,25 @@ def test_save_app_settings_updates_allowed_keys_without_blank_secret_overwrite(t
     assert "PULSEBOARD_SOURCE_URL=http://new" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_API_KEY=secret" in text
     assert "UNSUPPORTED_KEY" not in text
+
+
+def test_save_app_settings_does_not_update_llm_usage_sources(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main,academic-main\n"
+        "PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS=300\n",
+        encoding="utf-8",
+    )
+
+    result = save_app_settings(
+        {
+            "PULSEBOARD_LLM_USAGE_SOURCES": "deepseek-main",
+            "PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS": "600",
+        },
+        env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main,academic-main" in text
+    assert "PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS=600" in text
+    assert result["updated"] == ["PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS"]

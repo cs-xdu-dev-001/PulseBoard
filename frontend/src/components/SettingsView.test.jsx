@@ -50,7 +50,10 @@ const llmSources = [
 describe('Settings LLM供应商配置', () => {
   beforeEach(() => {
     fetchSettings.mockResolvedValue({
-      values: { PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS: '300' },
+      values: {
+        PULSEBOARD_LLM_USAGE_SOURCES: 'deepseek-main',
+        PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS: '300',
+      },
       secrets: {},
     })
     fetchLlmConfig.mockResolvedValue({ sources: llmSources })
@@ -99,6 +102,7 @@ describe('Settings LLM供应商配置', () => {
     fireEvent.click(within(provider).getByRole('button', { name: '编辑 主Key' }))
 
     expect(screen.getByLabelText('供应商ID')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('供应商名称')).toHaveAttribute('readonly')
     expect(screen.getByLabelText('保存ID')).toHaveAttribute('readonly')
     expect(screen.getByLabelText('保存ID')).toHaveValue('deepseek-main')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
@@ -111,5 +115,89 @@ describe('Settings LLM供应商配置', () => {
     const provider = await screen.findByTestId('llm-provider-academic')
     fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
     expect(within(provider).getByText('密钥未配置')).toBeVisible()
+  })
+
+  it('折叠态显示供应商整体密钥状态', async () => {
+    render(<SettingsView />)
+
+    const academic = await screen.findByTestId('llm-provider-academic')
+    const deepseek = screen.getByTestId('llm-provider-deepseek')
+    expect(within(academic).getByText('1个未配置')).toBeVisible()
+    expect(within(deepseek).getByText('全部已配置')).toBeVisible()
+  })
+
+  it('保存后重新加载失败时保留编辑器并显示错误', async () => {
+    fetchLlmConfig
+      .mockResolvedValueOnce({ sources: llmSources })
+      .mockRejectedValueOnce(new Error('重新加载失败'))
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('重新加载失败')
+    expect(screen.getByRole('heading', { name: '为DeepSeek添加Key' })).toBeVisible()
+    expect(screen.queryByText(/已保存Key 3/)).not.toBeInTheDocument()
+  })
+
+  it('保存运行参数时不会回写隐藏的LLM来源列表', async () => {
+    render(<SettingsView />)
+
+    await screen.findByRole('heading', { name: 'LLM供应商' })
+    fireEvent.click(screen.getByRole('button', { name: '保存运行参数' }))
+
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith({
+        values: { PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS: '300' },
+        secrets: {},
+      })
+    })
+  })
+
+  it('保存运行参数后重新加载失败时不显示成功', async () => {
+    fetchSettings
+      .mockResolvedValueOnce({
+        values: {
+          PULSEBOARD_LLM_USAGE_SOURCES: 'deepseek-main',
+          PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS: '300',
+        },
+        secrets: {},
+      })
+      .mockRejectedValueOnce(new Error('Settings重新加载失败'))
+
+    render(<SettingsView />)
+
+    await screen.findByRole('heading', { name: 'LLM供应商' })
+    fireEvent.click(screen.getByRole('button', { name: '保存运行参数' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Settings重新加载失败')
+    expect(screen.queryByText('已保存，部分采集配置可能需要等待下一轮采集生效')).not.toBeInTheDocument()
+  })
+
+  it('拒绝超过64字符的最终保存ID', async () => {
+    render(<SettingsView />)
+
+    await screen.findByRole('heading', { name: 'LLM供应商' })
+    fireEvent.click(screen.getByRole('button', { name: '新增供应商' }))
+    fireEvent.change(screen.getByLabelText('供应商ID'), { target: { value: 'p'.repeat(40) } })
+    fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'k'.repeat(30) } })
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    expect(await screen.findByText(/保存ID不能超过64个字符/)).toBeVisible()
+    expect(saveLlmConfig).not.toHaveBeenCalled()
+  })
+
+  it('拒绝与现有Key产生env前缀冲突的保存ID', async () => {
+    render(<SettingsView />)
+
+    await screen.findByRole('heading', { name: 'LLM供应商' })
+    fireEvent.click(screen.getByRole('button', { name: '新增供应商' }))
+    fireEvent.change(screen.getByLabelText('供应商ID'), { target: { value: 'deepseek' } })
+    fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'main' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    expect(await screen.findByText(/保存ID与现有Key“主Key”冲突/)).toBeVisible()
+    expect(saveLlmConfig).not.toHaveBeenCalled()
   })
 })

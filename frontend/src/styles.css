@@ -710,10 +710,25 @@ footer {
   white-space: nowrap;
 }
 
-.provider-settings-identity > span {
-  color: #39ff9d;
+.provider-settings-summary {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 14px;
   font-size: 14px;
   font-weight: 700;
+}
+
+.provider-key-count {
+  color: #82a4ba;
+}
+
+.provider-secret-summary.configured {
+  color: #39ff9d;
+}
+
+.provider-secret-summary.warning {
+  color: #ff9eea;
 }
 
 .provider-settings-actions {
@@ -1434,10 +1449,21 @@ footer {
   color: #60798d;
 }
 
-:root[data-theme="light"] .provider-settings-identity > span,
 :root[data-theme="light"] .secret-status.configured,
 :root[data-theme="light"] .llm-key-editor-grid .source-id-input {
   color: #008f6d;
+}
+
+:root[data-theme="light"] .provider-key-count {
+  color: #60798d;
+}
+
+:root[data-theme="light"] .provider-secret-summary.configured {
+  color: #008f6d;
+}
+
+:root[data-theme="light"] .provider-secret-summary.warning {
+  color: #b4237c;
 }
 
 :root[data-theme="light"] .secret-status {
@@ -1563,7 +1589,7 @@ footer {
     grid-row: 2;
   }
 
-  .provider-settings-identity > span {
+  .provider-settings-summary {
     grid-column: 2;
     grid-row: 1;
   }
@@ -1645,9 +1671,11 @@ footer {
   }
 
   .provider-settings-identity code,
-  .provider-settings-identity > span {
+  .provider-settings-summary {
     grid-column: 1;
     grid-row: auto;
+    justify-self: start;
+    flex-wrap: wrap;
   }
 
   .llm-key-editor-grid {

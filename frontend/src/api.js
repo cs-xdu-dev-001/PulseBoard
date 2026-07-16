@@ -3,9 +3,24 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 async function getJson(path) {
   const response = await fetch(`${API_BASE}${path}`)
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw new Error(await readErrorMessage(response))
   }
   return response.json()
+}
+
+async function readErrorMessage(response) {
+  try {
+    const payload = await response.clone().json()
+    if (typeof payload.detail === 'string') return payload.detail
+    if (Array.isArray(payload.detail)) {
+      const messages = payload.detail.map((item) => item?.msg || item?.message).filter(Boolean)
+      if (messages.length) return messages.join('；')
+    }
+    if (payload.detail) return JSON.stringify(payload.detail)
+  } catch {
+    // Non-JSON error bodies fall back to the HTTP status below.
+  }
+  return `HTTP ${response.status}`
 }
 
 export function fetchCurrentDashboard() {
@@ -39,7 +54,7 @@ export async function saveLlmConfig(payload) {
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw new Error(await readErrorMessage(response))
   }
   return response.json()
 }
@@ -65,7 +80,7 @@ export function fetchLlmModels(range, source = '') {
 export async function refreshLlmUsage() {
   const response = await fetch(`${API_BASE}/api/llm/usage/refresh`, { method: 'POST' })
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw new Error(await readErrorMessage(response))
   }
   return response.json()
 }
@@ -81,7 +96,7 @@ export async function saveSettings(payload) {
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw new Error(await readErrorMessage(response))
   }
   return response.json()
 }

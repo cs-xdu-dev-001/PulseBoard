@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -215,7 +215,10 @@ def llm_usage_config() -> dict:
 
 @router.post("/llm/usage/config")
 def save_llm_usage_source(payload: LlmUsageConfigPayload) -> dict:
-    result = save_llm_usage_config(payload.model_dump())
+    try:
+        result = save_llm_usage_config(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     get_settings.cache_clear()
     return {"ok": True, **result}
 

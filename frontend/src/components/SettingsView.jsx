@@ -35,6 +35,8 @@ const sections = [
   },
 ]
 
+const editableValueKeys = sections.flatMap((section) => section.fields.map(([key]) => key))
+
 export function SettingsView() {
   const [values, setValues] = useState({})
   const [status, setStatus] = useState('')
@@ -43,10 +45,12 @@ export function SettingsView() {
   async function load() {
     try {
       const payload = await fetchSettings()
-      setValues(payload.values || {})
+      setValues(pickEditableValues(payload.values))
       setError('')
+      return true
     } catch (err) {
       setError(err.message)
+      return false
     }
   }
 
@@ -58,8 +62,12 @@ export function SettingsView() {
     event.preventDefault()
     setStatus('保存中')
     try {
-      await saveSettings({ values, secrets: {} })
-      await load()
+      await saveSettings({ values: pickEditableValues(values), secrets: {} })
+      const refreshed = await load()
+      if (!refreshed) {
+        setStatus('')
+        return
+      }
       setStatus('已保存，部分采集配置可能需要等待下一轮采集生效')
       setError('')
     } catch (err) {
@@ -70,7 +78,7 @@ export function SettingsView() {
 
   return (
     <section className="settings-view">
-      {error && <section className="notice danger">Settings 请求失败：{error}</section>}
+      {error && <section className="notice danger" role="alert">Settings 请求失败：{error}</section>}
       <LlmProviderSettings />
       <form onSubmit={handleSubmit}>
         <section className="settings-header">
@@ -95,7 +103,15 @@ export function SettingsView() {
 
         </div>
       </form>
-      {status && <section className="notice">{status}</section>}
+      {status && <section className="notice" role="status" aria-live="polite">{status}</section>}
     </section>
+  )
+}
+
+function pickEditableValues(values = {}) {
+  return Object.fromEntries(
+    editableValueKeys
+      .filter((key) => Object.prototype.hasOwnProperty.call(values, key))
+      .map((key) => [key, values[key]]),
   )
 }

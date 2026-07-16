@@ -1,12 +1,11 @@
-from pathlib import Path
+import pytest
 
 from app.config import Settings
 from app.llm_usage import LlmUsageConfig, list_llm_usage_config, load_llm_usage_configs, normalize_deepseek_balance, normalize_newapi, save_llm_usage_config
 from app.llm_pricing import estimate_model_cost_usd
 
 
-def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path, monkeypatch):
-    env_path = Path("C:/Users/z2986/Desktop/PulseBoard/.env")
+def test_load_llm_usage_configs_supports_custom_source_ids(monkeypatch):
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_TYPE", "newapi_admin")
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME", "Academic Gateway")
     monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_BASE_URL", "https://new-api.example.com")
@@ -15,7 +14,6 @@ def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path, monkeypatch
     settings = Settings(llm_usage_sources="academic")
     configs = load_llm_usage_configs(settings)
 
-    assert env_path.name == ".env"
     assert configs[0].source_id == "academic"
     assert configs[0].display_name == "Academic Gateway"
     assert configs[0].base_url == "https://new-api.example.com"
@@ -77,7 +75,7 @@ def test_newapi_quota_falls_back_to_usd_when_tokens_are_missing():
 
 
 def test_save_llm_usage_config_writes_env_without_echoing_secret(tmp_path, monkeypatch):
-    env_path = tmp_path / ".env"
+    env_path = tmp_path / "test.env"
     env_path.write_text("PULSEBOARD_LLM_USAGE_SOURCES=academic\n", encoding="utf-8")
 
     result = save_llm_usage_config(
@@ -97,7 +95,7 @@ def test_save_llm_usage_config_writes_env_without_echoing_secret(tmp_path, monke
 
 
 def test_save_llm_usage_config_writes_provider_group_metadata(tmp_path):
-    env_path = tmp_path / ".env"
+    env_path = tmp_path / "test.env"
 
     result = save_llm_usage_config(
         {
@@ -116,6 +114,22 @@ def test_save_llm_usage_config_writes_provider_group_metadata(tmp_path):
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key" in text
+
+
+def test_save_llm_usage_config_rejects_env_prefix_collision(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text("PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="conflicts with existing source_id deepseek-main"):
+        save_llm_usage_config(
+            {
+                "source_id": "deepseek_main",
+                "source_type": "deepseek_balance",
+                "provider_id": "deepseek",
+                "display_name": "冲突Key",
+            },
+            env_path=env_path,
+        )
 
 
 def test_list_llm_usage_config_masks_secret(monkeypatch):

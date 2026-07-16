@@ -108,6 +108,9 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
 
     env = _merged_env(env_path)
     sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    for existing_source_id in sources:
+        if existing_source_id != source_id and _env_key(existing_source_id) == _env_key(source_id):
+            raise ValueError(f"source_id {source_id} conflicts with existing source_id {existing_source_id}")
     if source_id not in sources:
         sources.append(source_id)
     prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"

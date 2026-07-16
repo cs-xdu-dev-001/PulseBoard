@@ -3,6 +3,11 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.pytest-local-tmp/
+.pytest-tmp/
+tmp-pytest-fixtures/
+tmp-pytest/
+tmp-py-direct/
 .mypy_cache/
 .worktrees/
 node_modules/

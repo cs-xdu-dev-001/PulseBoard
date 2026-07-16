@@ -22,12 +22,18 @@ VALUE_KEYS = [
     "PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS",
 ]
 
+WRITABLE_VALUE_KEYS = [
+    key
+    for key in VALUE_KEYS
+    if key != "PULSEBOARD_LLM_USAGE_SOURCES"
+]
+
 SECRET_KEYS = [
     "PULSEBOARD_LLM_DEEPSEEK_API_KEY",
     "PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN",
 ]
 
-ALL_KEYS = set(VALUE_KEYS + SECRET_KEYS)
+WRITABLE_KEYS = set(WRITABLE_VALUE_KEYS + SECRET_KEYS)
 
 
 def load_app_settings(env_path: Path | None = None) -> dict[str, Any]:
@@ -43,7 +49,7 @@ def save_app_settings(values: dict[str, Any], env_path: Path | None = None) -> d
     env_path = env_path or ROOT_DIR / ".env"
     updates: dict[str, str] = {}
     for key, value in values.items():
-        if key not in ALL_KEYS:
+        if key not in WRITABLE_KEYS:
             continue
         text = str(value or "").strip()
         if key in SECRET_KEYS and not text:

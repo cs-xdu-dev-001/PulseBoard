@@ -115,3 +115,24 @@ def test_llm_usage_series_includes_model_area_series():
     assert payload["model_series"][0]["model"] == "gpt-4.1-mini"
     assert payload["model_series"][0]["points"][0]["estimated_cost_usd"] == 2.0
     assert payload["model_series"][0]["points"][0]["request_count"] == 10
+
+
+def test_save_llm_usage_config_returns_422_detail(monkeypatch):
+    def raise_value_error(_values):
+        raise ValueError("source_id deepseek_main conflicts with existing source_id deepseek-main")
+
+    monkeypatch.setattr("app.routes.save_llm_usage_config", raise_value_error)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/llm/usage/config",
+        json={
+            "source_id": "deepseek_main",
+            "source_type": "deepseek_balance",
+            "provider_id": "deepseek",
+            "display_name": "冲突Key",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "source_id deepseek_main conflicts with existing source_id deepseek-main"

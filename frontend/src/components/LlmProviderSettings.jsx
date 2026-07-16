@@ -32,8 +32,10 @@ export function LlmProviderSettings() {
       const payload = await fetchLlmConfig()
       setConfigs(payload.sources || [])
       setError('')
+      return true
     } catch (err) {
       setError(err.message)
+      return false
     } finally {
       setLoading(false)
     }
@@ -92,11 +94,21 @@ export function LlmProviderSettings() {
       setError('供应商ID和Key ID只能使用小写字母、数字、-、_。')
       return
     }
+    const sourceId = editor.original_source_id || `${providerId}-${keyId}`
+    if (sourceId.length > 64) {
+      setError('保存ID不能超过64个字符。')
+      return
+    }
+    const conflict = configs.find((item) => item.source_id !== editor.original_source_id && envKey(item.source_id) === envKey(sourceId))
+    if (conflict) {
+      setError(`保存ID与现有Key“${conflict.display_name}”冲突。`)
+      return
+    }
 
     const payload = {
       provider_id: providerId,
       provider_name: editor.provider_name.trim() || providerId,
-      source_id: editor.original_source_id || `${providerId}-${keyId}`,
+      source_id: sourceId,
       display_name: editor.display_name.trim() || keyId,
       source_type: editor.source_type,
       base_url: editor.source_type === 'newapi_admin' ? editor.base_url.trim() : '',
@@ -108,7 +120,8 @@ export function LlmProviderSettings() {
     setSaving(true)
     try {
       await saveLlmConfig(payload)
-      await load()
+      const refreshed = await load()
+      if (!refreshed) return
       setEditor(null)
       setStatus(`已保存${payload.display_name}`)
       setError('')
@@ -133,8 +146,8 @@ export function LlmProviderSettings() {
         <button className="glow-button" type="button" onClick={openNewProvider}>新增供应商</button>
       </header>
 
-      {error && <div className="settings-inline-message danger">配置请求失败：{error}</div>}
-      {status && <div className="settings-inline-message">{status}</div>}
+      {error && <div className="settings-inline-message danger" role="alert">配置请求失败：{error}</div>}
+      {status && <div className="settings-inline-message" role="status" aria-live="polite">{status}</div>}
 
       {editor && (
         <form className="llm-key-editor" onSubmit={handleSave}>
@@ -154,7 +167,12 @@ export function LlmProviderSettings() {
             </label>
             <label>
               <span>供应商名称</span>
-              <input value={editor.provider_name} onChange={(event) => setEditor({ ...editor, provider_name: event.target.value })} placeholder="DeepSeek" />
+              <input
+                value={editor.provider_name}
+                onChange={(event) => setEditor({ ...editor, provider_name: event.target.value })}
+                placeholder="DeepSeek"
+                readOnly={editor.mode !== 'create-provider'}
+              />
             </label>
             <label>
               <span>Key ID</span>
@@ -222,13 +240,19 @@ export function LlmProviderSettings() {
       <div className="provider-settings-list">
         {groups.map((group) => {
           const expanded = Boolean(expandedProviders[group.provider_id])
+          const unconfiguredCount = group.items.filter((item) => !isSecretConfigured(item)).length
           return (
             <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
               <header>
                 <div className="provider-settings-identity">
                   <h3>{group.provider_name}</h3>
                   <code>{group.provider_id}</code>
-                  <span>{group.items.length}个Key</span>
+                  <div className="provider-settings-summary">
+                    <span className="provider-key-count">{group.items.length}个Key</span>
+                    <span className={`provider-secret-summary ${unconfiguredCount ? 'warning' : 'configured'}`}>
+                      {unconfiguredCount ? `${unconfiguredCount}个未配置` : '全部已配置'}
+                    </span>
+                  </div>
                 </div>
                 <div className="provider-settings-actions">
                   <button
@@ -272,7 +296,7 @@ export function LlmProviderSettings() {
           )
         })}
         {!loading && groups.length === 0 && <div className="settings-empty">尚未配置LLM供应商。</div>}
-        {loading && <div className="settings-empty">正在读取LLM配置</div>}
+        {loading && <div className="settings-empty" role="status">正在读取LLM配置</div>}
       </div>
     </section>
   )
@@ -292,7 +316,12 @@ function groupConfigs(items = []) {
 }
 
 function normalizeIdPart(value) {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return /^[a-z0-9_-]{1,64}$/.test(normalized) ? normalized : ''
+}
+
+function envKey(value) {
+  return String(value || '').toUpperCase().replaceAll('-', '_')
 }
 
 function keyIdFromSource(sourceId, providerId) {
