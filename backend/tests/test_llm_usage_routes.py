@@ -83,6 +83,8 @@ def test_llm_usage_sources_do_not_expose_secrets():
     assert response.status_code == 200
     payload = response.json()
     assert payload["sources"][0]["source_id"] == "academic"
+    assert payload["sources"][0]["provider_id"] == "academic"
+    assert payload["sources"][0]["provider_name"] == "Academic Gateway"
     assert payload["sources"][0]["display_name"] == "Academic Gateway"
     assert "access_token" not in payload["sources"][0]
     assert "api_key" not in payload["sources"][0]

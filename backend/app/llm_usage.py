@@ -16,6 +16,8 @@ class LlmUsageConfig:
     source_id: str
     display_name: str
     source_type: str
+    provider_id: str | None = None
+    provider_name: str | None = None
     base_url: str | None = None
     api_key: str | None = None
     access_token: str | None = None
@@ -54,6 +56,8 @@ def load_llm_usage_configs(settings: Settings) -> list[LlmUsageConfig]:
         prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
         source_type = env.get(prefix + "TYPE", "").strip()
         display_name = env.get(prefix + "DISPLAY_NAME", "").strip() or source_id
+        provider_id = env.get(prefix + "PROVIDER_ID", "").strip() or source_id
+        provider_name = env.get(prefix + "PROVIDER_NAME", "").strip() or display_name
         if not source_type:
             continue
         configs.append(
@@ -61,6 +65,8 @@ def load_llm_usage_configs(settings: Settings) -> list[LlmUsageConfig]:
                 source_id=source_id,
                 display_name=display_name,
                 source_type=source_type,
+                provider_id=provider_id,
+                provider_name=provider_name,
                 base_url=(env.get(prefix + "BASE_URL") or "").strip() or None,
                 api_key=(env.get(prefix + "API_KEY") or "").strip() or None,
                 access_token=(env.get(prefix + "ACCESS_TOKEN") or "").strip() or None,
@@ -74,6 +80,8 @@ def list_llm_usage_config(settings: Settings) -> list[dict[str, Any]]:
     return [
         {
             "source_id": config.source_id,
+            "provider_id": config.provider_id,
+            "provider_name": config.provider_name,
             "display_name": config.display_name,
             "source_type": config.source_type,
             "base_url": config.base_url,
@@ -93,6 +101,10 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     source_type = str(values.get("source_type") or "").strip()
     if source_type not in {"deepseek_balance", "newapi_admin"}:
         raise ValueError("source_type must be deepseek_balance or newapi_admin")
+    provider_id = str(values.get("provider_id") or source_id).strip()
+    if not re.fullmatch(r"[a-z0-9_-]{1,64}", provider_id):
+        raise ValueError("provider_id must use lowercase letters, numbers, '-' or '_'")
+    provider_name = str(values.get("provider_name") or values.get("display_name") or provider_id).strip()
 
     env = _merged_env(env_path)
     sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
@@ -102,6 +114,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     updates = {
         "PULSEBOARD_LLM_USAGE_SOURCES": ",".join(sources),
         prefix + "TYPE": source_type,
+        prefix + "PROVIDER_ID": provider_id,
+        prefix + "PROVIDER_NAME": provider_name,
         prefix + "DISPLAY_NAME": str(values.get("display_name") or source_id).strip(),
     }
     if values.get("base_url") is not None:
@@ -114,7 +128,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
         updates[prefix + "USER_ID"] = str(values.get("user_id") or "1").strip()
 
     _write_env(env_path, updates)
-    return {"source_id": source_id}
+    return {"source_id": source_id, "provider_id": provider_id}
 
 
 def deepseek_balance_url() -> str:

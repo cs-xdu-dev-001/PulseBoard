@@ -91,9 +91,31 @@ def test_save_llm_usage_config_writes_env_without_echoing_secret(tmp_path, monke
     )
 
     text = env_path.read_text(encoding="utf-8")
-    assert result == {"source_id": "deepseek"}
+    assert result == {"source_id": "deepseek", "provider_id": "deepseek"}
     assert "PULSEBOARD_LLM_USAGE_SOURCES=academic,deepseek" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_API_KEY=secret-key" in text
+
+
+def test_save_llm_usage_config_writes_provider_group_metadata(tmp_path):
+    env_path = tmp_path / ".env"
+
+    result = save_llm_usage_config(
+        {
+            "source_id": "deepseek-main",
+            "source_type": "deepseek_balance",
+            "provider_id": "deepseek",
+            "provider_name": "DeepSeek",
+            "display_name": "主Key",
+            "api_key": "secret-key",
+        },
+        env_path=env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result == {"source_id": "deepseek-main", "provider_id": "deepseek"}
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key" in text
 
 
 def test_list_llm_usage_config_masks_secret(monkeypatch):
@@ -105,5 +127,23 @@ def test_list_llm_usage_config_masks_secret(monkeypatch):
     result = list_llm_usage_config(settings)
 
     assert result[0]["source_id"] == "deepseek"
+    assert result[0]["provider_id"] == "deepseek"
+    assert result[0]["provider_name"] == "DeepSeek"
     assert result[0]["has_api_key"] is True
     assert "api_key" not in result[0]
+
+
+def test_list_llm_usage_config_returns_provider_group_metadata(monkeypatch):
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE", "deepseek_balance")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID", "deepseek")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME", "DeepSeek")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME", "主Key")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY", "secret")
+
+    settings = Settings(llm_usage_sources="deepseek-main")
+    result = list_llm_usage_config(settings)
+
+    assert result[0]["source_id"] == "deepseek-main"
+    assert result[0]["provider_id"] == "deepseek"
+    assert result[0]["provider_name"] == "DeepSeek"
+    assert result[0]["display_name"] == "主Key"

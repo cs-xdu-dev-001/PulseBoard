@@ -19,12 +19,15 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [series, setSeries] = useState(null)
   const [models, setModels] = useState([])
   const [showConfig, setShowConfig] = useState(false)
+  const [expandedProviders, setExpandedProviders] = useState({})
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [form, setForm] = useState({
-    source_id: 'deepseek',
+    provider_id: 'deepseek',
+    provider_name: 'DeepSeek',
+    key_id: 'main',
     source_type: 'deepseek_balance',
-    display_name: 'DeepSeek',
+    display_name: '主Key',
     base_url: '',
     api_key: '',
     access_token: '',
@@ -71,7 +74,19 @@ export function LlmUsageView({ theme = 'dark' }) {
 
   async function handleSaveConfig(event) {
     event.preventDefault()
-    const payload = { ...form }
+    const providerId = normalizeIdPart(form.provider_id)
+    const keyId = normalizeIdPart(form.key_id)
+    if (!providerId || !keyId) {
+      setError('供应商ID和Key ID只能使用小写字母、数字、-、_。')
+      return
+    }
+    const payload = {
+      ...form,
+      provider_id: providerId,
+      provider_name: form.provider_name.trim() || providerId,
+      source_id: `${providerId}-${keyId}`,
+      display_name: form.display_name.trim() || form.key_id.trim() || keyId,
+    }
     if (payload.source_type === 'deepseek_balance') {
       payload.base_url = ''
       payload.access_token = ''
@@ -91,6 +106,9 @@ export function LlmUsageView({ theme = 'dark' }) {
   }
 
   const totalBalance = sources.reduce((sum, item) => sum + (item.balance_total || 0), 0)
+  const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
+  const configGroups = useMemo(() => groupLlmItems(configs), [configs])
+  const selectorGroups = configGroups.length ? configGroups : sourceGroups
 
   return (
     <section className="llm-view">
@@ -106,8 +124,12 @@ export function LlmUsageView({ theme = 'dark' }) {
         </div>
         <select value={source} onChange={(event) => setSource(event.target.value)}>
           <option value="">全部来源</option>
-          {sources.map((item) => (
-            <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
+          {selectorGroups.map((group) => (
+            <optgroup key={group.provider_id} label={group.provider_name}>
+              {group.items.map((item) => (
+                <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
+              ))}
+            </optgroup>
           ))}
         </select>
         <button className="glow-button" onClick={() => setShowConfig(!showConfig)}>{showConfig ? '收起配置' : '添加来源'}</button>
@@ -119,8 +141,20 @@ export function LlmUsageView({ theme = 'dark' }) {
           <div className="table-title">配置 LLM 来源</div>
           <div className="config-grid">
             <label>
-              <span>Source ID</span>
-              <input value={form.source_id} onChange={(event) => setForm({ ...form, source_id: event.target.value })} placeholder="deepseek" />
+              <span>供应商ID</span>
+              <input value={form.provider_id} onChange={(event) => setForm({ ...form, provider_id: event.target.value })} placeholder="deepseek" />
+            </label>
+            <label>
+              <span>供应商名</span>
+              <input value={form.provider_name} onChange={(event) => setForm({ ...form, provider_name: event.target.value })} placeholder="DeepSeek" />
+            </label>
+            <label>
+              <span>Key ID</span>
+              <input value={form.key_id} onChange={(event) => setForm({ ...form, key_id: event.target.value })} placeholder="main" />
+            </label>
+            <label>
+              <span>Key展示名</span>
+              <input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} placeholder="主Key" />
             </label>
             <label>
               <span>类型</span>
@@ -128,10 +162,6 @@ export function LlmUsageView({ theme = 'dark' }) {
                 <option value="deepseek_balance">DeepSeek 余额</option>
                 <option value="newapi_admin">New API 管理统计</option>
               </select>
-            </label>
-            <label>
-              <span>展示名</span>
-              <input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} placeholder="DeepSeek 官方" />
             </label>
             {form.source_type === 'newapi_admin' && (
               <label>
@@ -167,11 +197,16 @@ export function LlmUsageView({ theme = 'dark' }) {
       <div className="configured-strip">
         <span>来源</span>
         <button className={source === '' ? 'active' : ''} onClick={() => setSource('')}>全部</button>
-        {configs.map((item) => (
-          <button key={item.source_id} className={source === item.source_id ? 'active' : ''} onClick={() => setSource(item.source_id)}>
-            {item.display_name}
-            <small>{item.has_api_key || item.has_access_token ? '已配置密钥' : '未配置密钥'}</small>
-          </button>
+        {configGroups.map((group) => (
+          <div className="configured-group" key={group.provider_id}>
+            <span>{group.provider_name}</span>
+            {group.items.map((item) => (
+              <button key={item.source_id} className={source === item.source_id ? 'active' : ''} onClick={() => setSource(item.source_id)}>
+                {item.display_name}
+                <small>{item.has_api_key || item.has_access_token ? '已配置' : '未配置'}</small>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
 
@@ -183,7 +218,16 @@ export function LlmUsageView({ theme = 'dark' }) {
       </div>
 
       <div className="llm-source-grid">
-        {sources.map((item) => <SourceCard key={item.source_id} source={item} active={source === item.source_id} onSelect={() => setSource(item.source_id)} />)}
+        {sourceGroups.map((group) => (
+          <ProviderCard
+            key={group.provider_id}
+            group={group}
+            activeSource={source}
+            expanded={expandedProviders[group.provider_id]}
+            onToggle={() => setExpandedProviders((current) => ({ ...current, [group.provider_id]: !current[group.provider_id] }))}
+            onSelectKey={(sourceId) => setSource(sourceId)}
+          />
+        ))}
         {sources.length === 0 && <div className="empty-panel">暂无 LLM 来源数据，保存配置后点击手动刷新。</div>}
       </div>
 
@@ -197,30 +241,55 @@ export function LlmUsageView({ theme = 'dark' }) {
   )
 }
 
-function SourceCard({ source, active, onSelect }) {
-  const isBalance = source.source_type === 'deepseek_balance'
+function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) {
+  const active = group.items.some((item) => item.source_id === activeSource)
+  const status = aggregateStatus(group.items)
+  const open = expanded || active
   return (
-    <article className={`llm-source-card ${active ? 'active' : ''}`} onClick={onSelect}>
+    <article className={`llm-source-card llm-provider-card ${active ? 'active' : ''}`} onClick={onToggle}>
       <div className="llm-source-top">
         <div>
-          <span className="chip">{source.source_type}</span>
-          <h3>{source.display_name}</h3>
-          <p>{source.source_id}</p>
+          <span className="chip">{group.items.length} keys</span>
+          <h3>{group.provider_name}</h3>
+          <p>{group.provider_id}</p>
         </div>
-        <span className={`llm-status ${source.status}`}>{statusText(source.status)}</span>
+        <span className={`llm-status ${status}`}>{statusText(status)}</span>
       </div>
       <div className="llm-source-metrics">
         <div>
-          <span>{isBalance ? '账户余额' : '余额估算'}</span>
-          <strong>{isBalance ? formatMoney(source.balance_total, source.balance_currency) : formatUsd(source.quota_remaining_usd)}</strong>
+          <span>可用余额</span>
+          <strong>{formatProviderBalance(group.items)}</strong>
         </div>
         <div>
-          <span>{isBalance ? '充值余额' : '累计花费'}</span>
-          <strong>{isBalance ? formatMoney(source.balance_topped_up, source.balance_currency) : formatUsd(source.quota_used_usd)}</strong>
+          <span>Key数量</span>
+          <strong>{group.items.length}</strong>
         </div>
       </div>
-      {source.last_error && <p className="error-text">{source.last_error}</p>}
-      <footer>最后采集 {formatTime(source.last_checked_at)}</footer>
+      {open && (
+        <div className="llm-key-list">
+          {group.items.map((item) => (
+            <button
+              type="button"
+              key={item.source_id}
+              className={`llm-key-row ${activeSource === item.source_id ? 'active' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onSelectKey(item.source_id)
+              }}
+            >
+              <span>
+                <strong>{item.display_name}</strong>
+                <small>{item.source_id}</small>
+              </span>
+              <span className={`llm-status ${item.status}`}>{statusText(item.status)}</span>
+              <span>{formatKeyBalance(item)}</span>
+              <small>{formatTime(item.last_checked_at)}</small>
+            </button>
+          ))}
+        </div>
+      )}
+      {group.items.some((item) => item.last_error) && <p className="error-text">{group.items.find((item) => item.last_error)?.last_error}</p>}
+      <footer>{open ? '点击卡片收起' : '点击卡片查看Key'}</footer>
     </article>
   )
 }
@@ -368,6 +437,53 @@ function AreaChart({ title, total, series, metric, formatter, compact = false, t
   }, [option])
 
   return <div className={`chart-card area-chart-card ${compact ? 'compact' : ''}`}><div ref={ref} className="chart area-chart" /></div>
+}
+
+function groupLlmItems(items = []) {
+  const groups = new Map()
+  for (const item of items) {
+    const providerId = item.provider_id || item.source_id
+    const providerName = item.provider_name || item.display_name || providerId
+    if (!groups.has(providerId)) {
+      groups.set(providerId, { provider_id: providerId, provider_name: providerName, items: [] })
+    }
+    groups.get(providerId).items.push(item)
+  }
+  return Array.from(groups.values()).sort((a, b) => a.provider_name.localeCompare(b.provider_name))
+}
+
+function aggregateStatus(items) {
+  if (!items.length) return 'unknown'
+  if (items.every((item) => item.status === 'online')) return 'online'
+  if (items.every((item) => item.status === 'offline')) return 'offline'
+  if (items.some((item) => item.status === 'degraded' || item.status === 'offline')) return 'degraded'
+  return 'unknown'
+}
+
+function formatProviderBalance(items) {
+  const balanceItems = items.filter((item) => item.balance_total != null)
+  if (balanceItems.length) {
+    const currency = balanceItems[0].balance_currency || ''
+    const total = balanceItems.reduce((sum, item) => sum + (item.balance_total || 0), 0)
+    return formatMoney(total, currency)
+  }
+  const quotaItems = items.filter((item) => item.quota_remaining_usd != null)
+  if (quotaItems.length) {
+    const total = quotaItems.reduce((sum, item) => sum + (item.quota_remaining_usd || 0), 0)
+    return formatUsd(total)
+  }
+  return '--'
+}
+
+function formatKeyBalance(item) {
+  if (item.balance_total != null) return formatMoney(item.balance_total, item.balance_currency)
+  if (item.quota_remaining_usd != null) return formatUsd(item.quota_remaining_usd)
+  return '--'
+}
+
+function normalizeIdPart(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return /^[a-z0-9_-]{1,64}$/.test(normalized) ? normalized : ''
 }
 
 function statusText(status) {

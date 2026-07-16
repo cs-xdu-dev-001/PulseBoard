@@ -22,6 +22,8 @@ router = APIRouter(prefix="/api")
 class LlmUsageConfigPayload(BaseModel):
     source_id: str
     source_type: str
+    provider_id: str | None = None
+    provider_name: str | None = None
     display_name: str | None = None
     base_url: str | None = None
     api_key: str | None = None
@@ -221,7 +223,8 @@ def save_llm_usage_source(payload: LlmUsageConfigPayload) -> dict:
 @router.get("/llm/usage/sources")
 def llm_usage_sources(db: Session = Depends(get_db)) -> dict:
     sources = db.scalars(select(LlmUsageSource).order_by(LlmUsageSource.display_name)).all()
-    return {"sources": [_llm_source_payload(source) for source in sources]}
+    configs = {config["source_id"]: config for config in list_llm_usage_config(get_settings())}
+    return {"sources": [_llm_source_payload(source, configs.get(source.source_id)) for source in sources]}
 
 
 @router.get("/llm/usage/summary")
@@ -506,11 +509,15 @@ def _latest_llm_snapshots(db: Session, range_value: str, source_id: str | None) 
     return list(latest.values())
 
 
-def _llm_source_payload(source: LlmUsageSource) -> dict:
+def _llm_source_payload(source: LlmUsageSource, config: dict | None = None) -> dict:
     is_newapi = source.source_type == "newapi_admin"
+    provider_id = config.get("provider_id") if config else source.source_id
+    provider_name = config.get("provider_name") if config else source.display_name
     return {
         "id": source.id,
         "source_id": source.source_id,
+        "provider_id": provider_id or source.source_id,
+        "provider_name": provider_name or source.display_name,
         "display_name": source.display_name,
         "source_type": source.source_type,
         "status": source.status,

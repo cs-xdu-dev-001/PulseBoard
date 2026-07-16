@@ -765,6 +765,67 @@ footer {
   font-size: 12px;
 }
 
+.llm-provider-card {
+  cursor: pointer;
+}
+
+.llm-key-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.llm-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) auto auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid rgba(139, 220, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 14, 26, 0.72);
+  color: #e8fbff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-key-row:hover,
+.llm-key-row.active {
+  border-color: rgba(57, 255, 157, 0.42);
+  box-shadow: 0 0 18px rgba(57, 255, 157, 0.12);
+}
+
+.llm-key-row span:first-child {
+  min-width: 0;
+}
+
+.llm-key-row strong,
+.llm-key-row small {
+  display: block;
+}
+
+.llm-key-row small {
+  overflow: hidden;
+  color: #8fa6b8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.configured-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.configured-group > span {
+  color: #8fa6b8;
+  font-size: 12px;
+}
+
 .empty-panel,
 .llm-table-card,
 .llm-config-card {
@@ -1113,7 +1174,8 @@ footer {
 :root[data-theme="light"] .settings-fields input,
 :root[data-theme="light"] .config-grid input,
 :root[data-theme="light"] .config-grid select,
-:root[data-theme="light"] .llm-toolbar select {
+:root[data-theme="light"] .llm-toolbar select,
+:root[data-theme="light"] .llm-key-row {
   border-color: rgba(15, 34, 51, 0.12);
   background: rgba(255, 255, 255, 0.84);
   color: #0f2233;
@@ -1182,6 +1244,10 @@ footer {
   .chart-grid,
   .overview-grid,
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .llm-key-row {
     grid-template-columns: 1fr;
   }
 
