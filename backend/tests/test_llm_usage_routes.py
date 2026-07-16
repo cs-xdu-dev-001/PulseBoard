@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
+import app.routes as routes
 from app.main import app
 from app.models import LlmUsageSnapshot, LlmUsageSource
 
@@ -136,3 +137,72 @@ def test_save_llm_usage_config_returns_422_detail(monkeypatch):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "source_id deepseek_main conflicts with existing source_id deepseek-main"
+
+
+def test_delete_llm_usage_config_route(monkeypatch):
+    calls = []
+
+    def fake_delete(source_id):
+        calls.append(source_id)
+        return {"deleted": [source_id]}
+
+    monkeypatch.setattr(routes, "delete_llm_usage_config", fake_delete)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.delete("/api/llm/usage/config/deepseek-main")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "deleted": ["deepseek-main"]}
+    assert calls == ["deepseek-main"]
+
+
+def test_delete_llm_provider_config_route(monkeypatch):
+    calls = []
+
+    def fake_delete(provider_id):
+        calls.append(provider_id)
+        return {"deleted": ["deepseek-main", "deepseek-backup"]}
+
+    monkeypatch.setattr(routes, "delete_llm_provider_config", fake_delete)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.delete("/api/llm/usage/providers/deepseek")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "deleted": ["deepseek-main", "deepseek-backup"]}
+    assert calls == ["deepseek"]
+
+
+def test_update_llm_provider_config_route(monkeypatch):
+    calls = []
+
+    def fake_update(provider_id, values):
+        calls.append((provider_id, values))
+        return {"updated": ["academic-main"]}
+
+    monkeypatch.setattr(routes, "update_llm_provider_config", fake_update)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.patch(
+        "/api/llm/usage/providers/academic",
+        json={
+            "provider_name": "Academic",
+            "source_type": "newapi_admin",
+            "base_url": "https://gateway.example.com",
+            "user_id": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "updated": ["academic-main"]}
+    assert calls == [
+        (
+            "academic",
+            {
+                "provider_name": "Academic",
+                "source_type": "newapi_admin",
+                "base_url": "https://gateway.example.com",
+                "user_id": "2",
+            },
+        )
+    ]

@@ -1,14 +1,25 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchLlmConfig, fetchSettings, saveLlmConfig, saveSettings } from '../api.js'
+import {
+  deleteLlmConfig,
+  deleteLlmProvider,
+  fetchLlmConfig,
+  fetchSettings,
+  saveLlmConfig,
+  saveSettings,
+  updateLlmProvider,
+} from '../api.js'
 import { SettingsView } from './SettingsView.jsx'
 
 vi.mock('../api.js', () => ({
   fetchLlmConfig: vi.fn(),
   fetchSettings: vi.fn(),
+  deleteLlmConfig: vi.fn(),
+  deleteLlmProvider: vi.fn(),
   saveLlmConfig: vi.fn(),
   saveSettings: vi.fn(),
+  updateLlmProvider: vi.fn(),
 }))
 
 const llmSources = [
@@ -57,8 +68,12 @@ describe('Settings LLM供应商配置', () => {
       secrets: {},
     })
     fetchLlmConfig.mockResolvedValue({ sources: llmSources })
+    deleteLlmConfig.mockResolvedValue({ ok: true })
+    deleteLlmProvider.mockResolvedValue({ ok: true })
     saveSettings.mockResolvedValue({ ok: true })
     saveLlmConfig.mockResolvedValue({ ok: true })
+    updateLlmProvider.mockResolvedValue({ ok: true })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
   it('默认折叠供应商并在展开后显示多个Key', async () => {
@@ -148,6 +163,60 @@ describe('Settings LLM供应商配置', () => {
     const provider = await screen.findByTestId('llm-provider-academic')
     fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
     expect(within(provider).getByText('密钥未配置')).toBeVisible()
+  })
+
+  it('编辑供应商公共配置时不出现密钥字段', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-academic')
+    fireEvent.click(within(provider).getByRole('button', { name: '编辑供应商' }))
+
+    expect(screen.getByRole('heading', { name: '编辑Academic Gateway' })).toBeVisible()
+    expect(screen.getByLabelText('供应商ID')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('供应商名称')).toHaveValue('Academic Gateway')
+    expect(screen.getByLabelText('接入类型')).toHaveValue('newapi_admin')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.com')
+    expect(screen.getByLabelText('User ID')).toHaveValue('1')
+    expect(screen.queryByLabelText('访问令牌')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'Academic' } })
+    fireEvent.change(screen.getByLabelText('User ID'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存供应商' }))
+
+    await waitFor(() => {
+      expect(updateLlmProvider).toHaveBeenCalledWith('academic', {
+        provider_name: 'Academic',
+        source_type: 'newapi_admin',
+        base_url: 'https://gateway.example.com',
+        user_id: '2',
+      })
+    })
+  })
+
+  it('可以删除单个Key并重新加载配置', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '删除Key 主Key' }))
+
+    await waitFor(() => {
+      expect(deleteLlmConfig).toHaveBeenCalledWith('deepseek-main')
+      expect(fetchLlmConfig).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('可以删除整个供应商', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '删除供应商' }))
+
+    await waitFor(() => {
+      expect(deleteLlmProvider).toHaveBeenCalledWith('deepseek')
+      expect(fetchLlmConfig).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('折叠态显示供应商整体密钥状态', async () => {

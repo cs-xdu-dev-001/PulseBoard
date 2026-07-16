@@ -59,6 +59,34 @@ export async function saveLlmConfig(payload) {
   return response.json()
 }
 
+export async function deleteLlmConfig(sourceId) {
+  const response = await fetch(`${API_BASE}/api/llm/usage/config/${encodeURIComponent(sourceId)}`, { method: 'DELETE' })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.json()
+}
+
+export async function updateLlmProvider(providerId, payload) {
+  const response = await fetch(`${API_BASE}/api/llm/usage/providers/${encodeURIComponent(providerId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.json()
+}
+
+export async function deleteLlmProvider(providerId) {
+  const response = await fetch(`${API_BASE}/api/llm/usage/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.json()
+}
+
 export function fetchLlmSummary(range, source = '') {
   const params = new URLSearchParams({ range })
   if (source) params.set('source', source)

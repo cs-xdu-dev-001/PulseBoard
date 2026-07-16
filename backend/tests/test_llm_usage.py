@@ -1,7 +1,17 @@
 import pytest
 
 from app.config import Settings
-from app.llm_usage import LlmUsageConfig, list_llm_usage_config, load_llm_usage_configs, normalize_deepseek_balance, normalize_newapi, save_llm_usage_config
+from app.llm_usage import (
+    LlmUsageConfig,
+    delete_llm_provider_config,
+    delete_llm_usage_config,
+    list_llm_usage_config,
+    load_llm_usage_configs,
+    normalize_deepseek_balance,
+    normalize_newapi,
+    save_llm_usage_config,
+    update_llm_provider_config,
+)
 from app.llm_pricing import estimate_model_cost_usd
 
 
@@ -130,6 +140,103 @@ def test_save_llm_usage_config_rejects_env_prefix_collision(tmp_path):
             },
             env_path=env_path,
         )
+
+
+def test_delete_llm_usage_config_removes_source_and_secret(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main,deepseek-backup,academic-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=main-secret",
+                "PULSEBOARD_LLM_DEEPSEEK_BACKUP_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_BACKUP_API_KEY=backup-secret",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = delete_llm_usage_config("deepseek-backup", env_path=env_path)
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result == {"deleted": ["deepseek-backup"]}
+    assert "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main,academic-main" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_BACKUP_" not in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=main-secret" in text
+
+
+def test_delete_llm_provider_config_removes_all_provider_sources(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main,deepseek-backup,academic-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_BACKUP_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_BACKUP_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = delete_llm_provider_config("deepseek", env_path=env_path)
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result == {"deleted": ["deepseek-main", "deepseek-backup"]}
+    assert "PULSEBOARD_LLM_USAGE_SOURCES=academic-main" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_" not in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_BACKUP_" not in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin" in text
+
+
+def test_update_llm_provider_config_updates_shared_fields(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic-main,academic-backup",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=Academic Gateway",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://old.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=main-token",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_PROVIDER_NAME=Academic Gateway",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_BASE_URL=https://old.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_ACCESS_TOKEN=backup-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = update_llm_provider_config(
+        "academic",
+        {
+            "provider_name": "Academic",
+            "source_type": "newapi_admin",
+            "base_url": "https://new.example.com",
+            "user_id": "2",
+        },
+        env_path=env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result == {"updated": ["academic-main", "academic-backup"]}
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=Academic" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_PROVIDER_NAME=Academic" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://new.example.com" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_BASE_URL=https://new.example.com" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_USER_ID=2" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=main-token" in text
 
 
 def test_list_llm_usage_config_masks_secret(monkeypatch):

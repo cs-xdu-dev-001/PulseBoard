@@ -134,6 +134,71 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     return {"source_id": source_id, "provider_id": provider_id}
 
 
+def delete_llm_usage_config(source_id: str, env_path: Path | None = None) -> dict[str, Any]:
+    env_path = env_path or ROOT_DIR / ".env"
+    source_id = _validated_id(source_id, "source_id")
+    env = _merged_env(env_path)
+    sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    if source_id not in sources:
+        raise ValueError(f"source_id {source_id} does not exist")
+    next_sources = [item for item in sources if item != source_id]
+    prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
+    updates = {"PULSEBOARD_LLM_USAGE_SOURCES": ",".join(next_sources)}
+    deletes = {key for key in env if key.startswith(prefix)}
+    _write_env(env_path, updates, deletes)
+    return {"deleted": [source_id]}
+
+
+def delete_llm_provider_config(provider_id: str, env_path: Path | None = None) -> dict[str, Any]:
+    env_path = env_path or ROOT_DIR / ".env"
+    provider_id = _validated_id(provider_id, "provider_id")
+    source_ids = _source_ids_for_provider(provider_id, env_path)
+    if not source_ids:
+        raise ValueError(f"provider_id {provider_id} does not exist")
+    env = _merged_env(env_path)
+    sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    updates = {"PULSEBOARD_LLM_USAGE_SOURCES": ",".join([item for item in sources if item not in source_ids])}
+    deletes = set()
+    for source_id in source_ids:
+        prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
+        deletes.update(key for key in env if key.startswith(prefix))
+    _write_env(env_path, updates, deletes)
+    return {"deleted": source_ids}
+
+
+def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_path: Path | None = None) -> dict[str, Any]:
+    env_path = env_path or ROOT_DIR / ".env"
+    provider_id = _validated_id(provider_id, "provider_id")
+    source_type = str(values.get("source_type") or "").strip()
+    if source_type not in {"deepseek_balance", "newapi_admin"}:
+        raise ValueError("source_type must be deepseek_balance or newapi_admin")
+    provider_name = str(values.get("provider_name") or provider_id).strip()
+    base_url = str(values.get("base_url") or "").strip()
+    user_id = str(values.get("user_id") or "1").strip() or "1"
+    source_ids = _source_ids_for_provider(provider_id, env_path)
+    if not source_ids:
+        raise ValueError(f"provider_id {provider_id} does not exist")
+
+    updates: dict[str, str] = {}
+    deletes: set[str] = set()
+    for source_id in source_ids:
+        prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
+        updates.update(
+            {
+                prefix + "PROVIDER_ID": provider_id,
+                prefix + "PROVIDER_NAME": provider_name,
+                prefix + "TYPE": source_type,
+            }
+        )
+        if source_type == "newapi_admin":
+            updates[prefix + "BASE_URL"] = base_url
+            updates[prefix + "USER_ID"] = user_id
+        else:
+            deletes.update({prefix + "BASE_URL", prefix + "USER_ID"})
+    _write_env(env_path, updates, deletes)
+    return {"updated": source_ids}
+
+
 def deepseek_balance_url() -> str:
     return "https://api.deepseek.com/user/balance"
 
@@ -244,7 +309,8 @@ def _merged_env(env_path: Path) -> dict[str, str]:
     return result
 
 
-def _write_env(env_path: Path, updates: dict[str, str]) -> None:
+def _write_env(env_path: Path, updates: dict[str, str], deletes: set[str] | None = None) -> None:
+    deletes = deletes or set()
     lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
     seen = set()
     next_lines = []
@@ -253,6 +319,8 @@ def _write_env(env_path: Path, updates: dict[str, str]) -> None:
             next_lines.append(line)
             continue
         key = line.split("=", 1)[0].strip()
+        if key in deletes:
+            continue
         if key in updates:
             next_lines.append(f"{key}={updates[key]}")
             seen.add(key)
@@ -262,6 +330,24 @@ def _write_env(env_path: Path, updates: dict[str, str]) -> None:
         if key not in seen:
             next_lines.append(f"{key}={value}")
     env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+
+
+def _validated_id(value: str, label: str) -> str:
+    item = str(value or "").strip()
+    if not re.fullmatch(r"[a-z0-9_-]{1,64}", item):
+        raise ValueError(f"{label} must use lowercase letters, numbers, '-' or '_'")
+    return item
+
+
+def _source_ids_for_provider(provider_id: str, env_path: Path) -> list[str]:
+    env = _merged_env(env_path)
+    source_ids = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    result = []
+    for source_id in source_ids:
+        prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
+        if (env.get(prefix + "PROVIDER_ID") or source_id).strip() == provider_id:
+            result.append(source_id)
+    return result
 
 
 def _env_key(value: str) -> str:

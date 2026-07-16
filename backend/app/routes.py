@@ -10,7 +10,14 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.llm_usage import list_llm_usage_config, load_llm_usage_configs, save_llm_usage_config
+from app.llm_usage import (
+    delete_llm_provider_config,
+    delete_llm_usage_config,
+    list_llm_usage_config,
+    load_llm_usage_configs,
+    save_llm_usage_config,
+    update_llm_provider_config,
+)
 from app.llm_usage_collector import collect_llm_usage_once
 from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
 from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSource, Machine, MachineMetric, VpsMetric, VpsNode
@@ -28,6 +35,13 @@ class LlmUsageConfigPayload(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     access_token: str | None = None
+    user_id: str | None = None
+
+
+class LlmProviderConfigPayload(BaseModel):
+    provider_name: str | None = None
+    source_type: str
+    base_url: str | None = None
     user_id: str | None = None
 
 
@@ -217,6 +231,36 @@ def llm_usage_config() -> dict:
 def save_llm_usage_source(payload: LlmUsageConfigPayload) -> dict:
     try:
         result = save_llm_usage_config(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    get_settings.cache_clear()
+    return {"ok": True, **result}
+
+
+@router.delete("/llm/usage/config/{source_id}")
+def delete_llm_usage_source(source_id: str) -> dict:
+    try:
+        result = delete_llm_usage_config(source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    get_settings.cache_clear()
+    return {"ok": True, **result}
+
+
+@router.patch("/llm/usage/providers/{provider_id}")
+def update_llm_usage_provider(provider_id: str, payload: LlmProviderConfigPayload) -> dict:
+    try:
+        result = update_llm_provider_config(provider_id, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    get_settings.cache_clear()
+    return {"ok": True, **result}
+
+
+@router.delete("/llm/usage/providers/{provider_id}")
+def delete_llm_usage_provider(provider_id: str) -> dict:
+    try:
+        result = delete_llm_provider_config(provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     get_settings.cache_clear()
