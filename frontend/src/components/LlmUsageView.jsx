@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
-import { fetchLlmConfig, fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refreshLlmUsage, saveLlmConfig } from '../api.js'
+import { fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refreshLlmUsage } from '../api.js'
 
 const ranges = [
   { value: 'today', label: '今天' },
@@ -14,37 +14,22 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [range, setRange] = useState('today')
   const [source, setSource] = useState('')
   const [sources, setSources] = useState([])
-  const [configs, setConfigs] = useState([])
   const [summary, setSummary] = useState(null)
   const [series, setSeries] = useState(null)
   const [models, setModels] = useState([])
-  const [showConfig, setShowConfig] = useState(false)
   const [expandedProviders, setExpandedProviders] = useState({})
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [form, setForm] = useState({
-    provider_id: 'deepseek',
-    provider_name: 'DeepSeek',
-    key_id: 'main',
-    source_type: 'deepseek_balance',
-    display_name: '主Key',
-    base_url: '',
-    api_key: '',
-    access_token: '',
-    user_id: '1',
-  })
 
   async function load(nextSource = source) {
     try {
-      const [nextSources, nextConfig, nextSummary, nextSeries, nextModels] = await Promise.all([
+      const [nextSources, nextSummary, nextSeries, nextModels] = await Promise.all([
         fetchLlmSources(),
-        fetchLlmConfig(),
         fetchLlmSummary(range, nextSource),
         fetchLlmSeries(range, nextSource),
         fetchLlmModels(range, nextSource),
       ])
       setSources(nextSources.sources || [])
-      setConfigs(nextConfig.sources || [])
       setSummary(nextSummary)
       setSeries(nextSeries)
       setModels(nextModels.models || [])
@@ -72,63 +57,8 @@ export function LlmUsageView({ theme = 'dark' }) {
     }
   }
 
-  async function handleSaveConfig(event) {
-    event.preventDefault()
-    const providerId = normalizeIdPart(form.provider_id)
-    const keyId = normalizeIdPart(form.key_id)
-    if (!providerId || !keyId) {
-      setError('供应商ID和Key ID只能使用小写字母、数字、-、_。')
-      return
-    }
-    const payload = {
-      ...form,
-      provider_id: providerId,
-      provider_name: form.provider_name.trim() || providerId,
-      source_id: `${providerId}-${keyId}`,
-      display_name: form.display_name.trim() || form.key_id.trim() || keyId,
-    }
-    if (payload.source_type === 'deepseek_balance') {
-      payload.base_url = ''
-      payload.access_token = ''
-      payload.user_id = ''
-    }
-    if (payload.source_type === 'newapi_admin') {
-      payload.api_key = ''
-    }
-    try {
-      await saveLlmConfig(payload)
-      setSource(payload.source_id)
-      await load(payload.source_id)
-      setShowConfig(false)
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
   const totalBalance = sources.reduce((sum, item) => sum + (item.balance_total || 0), 0)
   const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
-  const configGroups = useMemo(() => groupLlmItems(configs), [configs])
-  const selectorGroups = configGroups.length ? configGroups : sourceGroups
-  const sourceIdPreview = `${normalizeIdPart(form.provider_id) || 'provider'}-${normalizeIdPart(form.key_id) || 'key'}`
-
-  function handleAddProviderKey(group) {
-    const configGroup = configGroups.find((item) => item.provider_id === group.provider_id)
-    const template = configGroup?.items[0] || group.items[0] || {}
-    const nextIndex = (configGroup?.items.length || group.items.length || 0) + 1
-    setForm({
-      provider_id: group.provider_id,
-      provider_name: group.provider_name,
-      key_id: `key-${nextIndex}`,
-      source_type: template.source_type || 'deepseek_balance',
-      display_name: `Key ${nextIndex}`,
-      base_url: template.base_url || '',
-      api_key: '',
-      access_token: '',
-      user_id: template.user_id || '1',
-    })
-    setShowConfig(true)
-    setExpandedProviders((current) => ({ ...current, [group.provider_id]: true }))
-  }
 
   return (
     <section className="llm-view">
@@ -144,7 +74,7 @@ export function LlmUsageView({ theme = 'dark' }) {
         </div>
         <select value={source} onChange={(event) => setSource(event.target.value)}>
           <option value="">全部来源</option>
-          {selectorGroups.map((group) => (
+          {sourceGroups.map((group) => (
             <optgroup key={group.provider_id} label={group.provider_name}>
               {group.items.map((item) => (
                 <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
@@ -152,86 +82,7 @@ export function LlmUsageView({ theme = 'dark' }) {
             </optgroup>
           ))}
         </select>
-        <button className="glow-button" onClick={() => setShowConfig(!showConfig)}>{showConfig ? '收起配置' : '添加API Key'}</button>
         <button className="glow-button" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '刷新中' : '手动刷新'}</button>
-      </div>
-
-      {showConfig && (
-        <form className="llm-config-card" onSubmit={handleSaveConfig}>
-          <div className="table-title">添加API Key</div>
-          <div className="config-grid">
-            <label>
-              <span>供应商ID</span>
-              <input value={form.provider_id} onChange={(event) => setForm({ ...form, provider_id: event.target.value })} placeholder="deepseek" />
-            </label>
-            <label>
-              <span>供应商名</span>
-              <input value={form.provider_name} onChange={(event) => setForm({ ...form, provider_name: event.target.value })} placeholder="DeepSeek" />
-            </label>
-            <label>
-              <span>Key ID</span>
-              <input value={form.key_id} onChange={(event) => setForm({ ...form, key_id: event.target.value })} placeholder="main" />
-            </label>
-            <label>
-              <span>Key展示名</span>
-              <input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} placeholder="主Key" />
-            </label>
-            <label>
-              <span>类型</span>
-              <select value={form.source_type} onChange={(event) => setForm({ ...form, source_type: event.target.value })}>
-                <option value="deepseek_balance">DeepSeek 余额</option>
-                <option value="newapi_admin">New API 管理统计</option>
-              </select>
-            </label>
-            {form.source_type === 'newapi_admin' && (
-              <label>
-                <span>Base URL</span>
-                <input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://your-new-api.example.com" />
-              </label>
-            )}
-            {form.source_type === 'deepseek_balance' ? (
-              <label>
-                <span>API Key</span>
-                <input type="password" value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." />
-              </label>
-            ) : (
-              <>
-                <label>
-                  <span>访问令牌</span>
-                  <input type="password" value={form.access_token} onChange={(event) => setForm({ ...form, access_token: event.target.value })} placeholder="New API access token" />
-                </label>
-                <label>
-                <span>User ID</span>
-                <input value={form.user_id} onChange={(event) => setForm({ ...form, user_id: event.target.value })} placeholder="1" />
-              </label>
-            </>
-            )}
-            <div className="source-id-preview">
-              <span>保存ID</span>
-              <strong>{sourceIdPreview}</strong>
-            </div>
-          </div>
-          <footer className="config-footer">
-            <span>密钥只写入本地 .env，不回显到前端。</span>
-            <button className="glow-button" type="submit">保存配置</button>
-          </footer>
-        </form>
-      )}
-
-      <div className="configured-strip">
-        <span>API Key</span>
-        <button className={source === '' ? 'active' : ''} onClick={() => setSource('')}>全部</button>
-        {configGroups.map((group) => (
-          <div className="configured-group" key={group.provider_id}>
-            <span>{group.provider_name}</span>
-            {group.items.map((item) => (
-              <button key={item.source_id} className={source === item.source_id ? 'active' : ''} onClick={() => setSource(item.source_id)}>
-                {item.display_name}
-                <small>{item.has_api_key || item.has_access_token ? '已配置' : '未配置'}</small>
-              </button>
-            ))}
-          </div>
-        ))}
       </div>
 
       <div className="llm-kpi-grid">
@@ -250,10 +101,9 @@ export function LlmUsageView({ theme = 'dark' }) {
             expanded={expandedProviders[group.provider_id]}
             onToggle={() => setExpandedProviders((current) => ({ ...current, [group.provider_id]: !current[group.provider_id] }))}
             onSelectKey={(sourceId) => setSource(sourceId)}
-            onAddKey={handleAddProviderKey}
           />
         ))}
-        {sources.length === 0 && <div className="empty-panel">暂无 LLM 来源数据，保存配置后点击手动刷新。</div>}
+        {sources.length === 0 && <div className="empty-panel">暂无LLM来源数据，请先在Settings配置并手动刷新。</div>}
       </div>
 
       <div className="llm-chart-stack">
@@ -266,7 +116,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   )
 }
 
-function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey, onAddKey }) {
+function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) {
   const active = group.items.some((item) => item.source_id === activeSource)
   const status = aggregateStatus(group.items)
   const open = expanded || active
@@ -280,16 +130,6 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey, on
         </div>
         <div className="llm-source-actions">
           <span className={`llm-status ${status}`}>{statusText(status)}</span>
-          <button
-            type="button"
-            className="mini-action"
-            onClick={(event) => {
-              event.stopPropagation()
-              onAddKey(group)
-            }}
-          >
-            添加Key
-          </button>
         </div>
       </div>
       <div className="llm-source-metrics">
@@ -516,11 +356,6 @@ function formatKeyBalance(item) {
   if (item.balance_total != null) return formatMoney(item.balance_total, item.balance_currency)
   if (item.quota_remaining_usd != null) return formatUsd(item.quota_remaining_usd)
   return '--'
-}
-
-function normalizeIdPart(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
-  return /^[a-z0-9_-]{1,64}$/.test(normalized) ? normalized : ''
 }
 
 function statusText(status) {
