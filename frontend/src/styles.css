@@ -685,7 +685,7 @@ footer {
 
 .provider-settings-identity {
   display: grid;
-  grid-template-columns: minmax(130px, 0.8fr) minmax(170px, 1.2fr) auto;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.45fr) minmax(260px, 1.8fr);
   align-items: center;
   gap: 18px;
   min-width: 0;
@@ -714,13 +714,29 @@ footer {
   display: flex;
   align-items: center;
   justify-self: end;
-  gap: 14px;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 700;
 }
 
+.provider-source-type,
+.provider-endpoint,
 .provider-key-count {
   color: #82a4ba;
+}
+
+.provider-source-type,
+.provider-endpoint {
+  overflow: hidden;
+  max-width: 240px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-source-type {
+  color: #8bdcff;
 }
 
 .provider-secret-summary.configured {
@@ -775,7 +791,7 @@ footer {
 .provider-key-columns,
 .provider-key-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1.35fr) 120px minmax(180px, 1fr) 118px 72px;
+  grid-template-columns: minmax(190px, 1fr) 118px 72px;
   align-items: center;
   gap: 14px;
   padding: 0 20px;
@@ -874,6 +890,41 @@ footer {
 .llm-key-editor-title h3 {
   color: #e8fbff;
   font-size: 16px;
+}
+
+.llm-provider-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 20px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(139, 220, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(7, 13, 26, 0.38);
+  color: #9db2c2;
+  font-size: 14px;
+}
+
+.llm-provider-context strong {
+  color: #e8fbff;
+}
+
+.llm-provider-context code {
+  color: #82a4ba;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.llm-provider-context span {
+  overflow: hidden;
+  max-width: 320px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-provider-context span:first-of-type {
+  color: #8bdcff;
+  font-weight: 700;
 }
 
 .llm-key-editor-grid {
@@ -1431,6 +1482,7 @@ footer {
 :root[data-theme="light"] .provider-settings-row + .provider-settings-row,
 :root[data-theme="light"] .provider-key-list,
 :root[data-theme="light"] .provider-key-row,
+:root[data-theme="light"] .llm-provider-context,
 :root[data-theme="light"] .llm-key-editor {
   border-color: rgba(15, 34, 51, 0.1);
 }
@@ -1445,8 +1497,23 @@ footer {
 }
 
 :root[data-theme="light"] .provider-settings-identity code,
+:root[data-theme="light"] .llm-provider-context code,
 :root[data-theme="light"] .provider-key-name code {
   color: #60798d;
+}
+
+:root[data-theme="light"] .llm-provider-context {
+  background: rgba(255, 255, 255, 0.58);
+  color: #60798d;
+}
+
+:root[data-theme="light"] .llm-provider-context strong {
+  color: #0f2233;
+}
+
+:root[data-theme="light"] .provider-source-type,
+:root[data-theme="light"] .llm-provider-context span:first-of-type {
+  color: #006f9d;
 }
 
 :root[data-theme="light"] .secret-status.configured,
@@ -1454,6 +1521,7 @@ footer {
   color: #008f6d;
 }
 
+:root[data-theme="light"] .provider-endpoint,
 :root[data-theme="light"] .provider-key-count {
   color: #60798d;
 }
@@ -1615,23 +1683,13 @@ footer {
   }
 
   .provider-key-row > span:nth-child(2)::before {
-    content: "类型：";
-    color: #7890a3;
-  }
-
-  .provider-key-row > span:nth-child(3)::before {
-    content: "接口：";
-    color: #7890a3;
-  }
-
-  .provider-key-row > span:nth-child(4)::before {
     content: "状态：";
     color: #7890a3;
   }
 
   .provider-key-row > button {
     grid-column: 2;
-    grid-row: 2 / 5;
+    grid-row: 2;
     align-self: stretch;
   }
 

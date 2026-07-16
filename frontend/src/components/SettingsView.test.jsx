@@ -94,15 +94,48 @@ describe('Settings LLM供应商配置', () => {
     })
   })
 
-  it('编辑Key时锁定ID并且不回显已有密钥', async () => {
+  it('已有New API供应商下新增Key时只填写Key级配置', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-academic')
+    fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
+    fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'backup' } })
+    fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: '备用账号' } })
+    fireEvent.change(screen.getByLabelText('访问令牌'), { target: { value: 'token-value' } })
+
+    expect(screen.queryByLabelText('接入类型')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('User ID')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    await waitFor(() => {
+      expect(saveLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+        provider_id: 'academic',
+        provider_name: 'Academic Gateway',
+        source_id: 'academic-backup',
+        display_name: '备用账号',
+        source_type: 'newapi_admin',
+        base_url: 'https://gateway.example.com',
+        access_token: 'token-value',
+        user_id: '1',
+      }))
+    })
+  })
+
+  it('编辑Key时只展示Key级字段并且不回显已有密钥', async () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-deepseek')
     fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
     fireEvent.click(within(provider).getByRole('button', { name: '编辑 主Key' }))
 
-    expect(screen.getByLabelText('供应商ID')).toHaveAttribute('readonly')
-    expect(screen.getByLabelText('供应商名称')).toHaveAttribute('readonly')
+    expect(screen.queryByLabelText('供应商ID')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('供应商名称')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('接入类型')).not.toBeInTheDocument()
+    const editor = screen.getByRole('heading', { name: '编辑主Key' }).closest('form')
+    expect(within(editor).getAllByText('DeepSeek').length).toBeGreaterThan(0)
+    expect(within(editor).getByText('deepseek')).toBeVisible()
     expect(screen.getByLabelText('保存ID')).toHaveAttribute('readonly')
     expect(screen.getByLabelText('保存ID')).toHaveValue('deepseek-main')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
@@ -122,6 +155,8 @@ describe('Settings LLM供应商配置', () => {
 
     const academic = await screen.findByTestId('llm-provider-academic')
     const deepseek = screen.getByTestId('llm-provider-deepseek')
+    expect(within(academic).getByText('New API')).toBeVisible()
+    expect(within(academic).getByText('https://gateway.example.com')).toBeVisible()
     expect(within(academic).getByText('1个未配置')).toBeVisible()
     expect(within(deepseek).getByText('全部已配置')).toBeVisible()
   })

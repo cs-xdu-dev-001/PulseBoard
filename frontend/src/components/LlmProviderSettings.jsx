@@ -135,6 +135,7 @@ export function LlmProviderSettings() {
   const sourceIdPreview = editor
     ? editor.original_source_id || `${normalizeIdPart(editor.provider_id) || 'provider'}-${normalizeIdPart(editor.key_id) || 'key'}`
     : ''
+  const isProviderEditor = editor?.mode === 'create-provider'
 
   return (
     <section className="llm-settings-panel">
@@ -155,25 +156,35 @@ export function LlmProviderSettings() {
             <h3>{editor.mode === 'edit' ? `编辑${editor.display_name}` : editor.mode === 'create-key' ? `为${editor.provider_name}添加Key` : '新增供应商'}</h3>
             <button className="subtle-button" type="button" onClick={() => setEditor(null)}>取消</button>
           </div>
+          {!isProviderEditor && (
+            <div className="llm-provider-context">
+              <strong>{editor.provider_name}</strong>
+              <code>{editor.provider_id}</code>
+              <span>{sourceTypeText(editor.source_type)}</span>
+              <span>{providerEndpointText(editor)}</span>
+            </div>
+          )}
           <div className="llm-key-editor-grid">
-            <label>
-              <span>供应商ID</span>
-              <input
-                value={editor.provider_id}
-                onChange={(event) => setEditor({ ...editor, provider_id: event.target.value })}
-                placeholder="deepseek"
-                readOnly={editor.mode !== 'create-provider'}
-              />
-            </label>
-            <label>
-              <span>供应商名称</span>
-              <input
-                value={editor.provider_name}
-                onChange={(event) => setEditor({ ...editor, provider_name: event.target.value })}
-                placeholder="DeepSeek"
-                readOnly={editor.mode !== 'create-provider'}
-              />
-            </label>
+            {isProviderEditor && (
+              <>
+                <label>
+                  <span>供应商ID</span>
+                  <input
+                    value={editor.provider_id}
+                    onChange={(event) => setEditor({ ...editor, provider_id: event.target.value })}
+                    placeholder="deepseek"
+                  />
+                </label>
+                <label>
+                  <span>供应商名称</span>
+                  <input
+                    value={editor.provider_name}
+                    onChange={(event) => setEditor({ ...editor, provider_name: event.target.value })}
+                    placeholder="DeepSeek"
+                  />
+                </label>
+              </>
+            )}
             <label>
               <span>Key ID</span>
               <input
@@ -187,13 +198,15 @@ export function LlmProviderSettings() {
               <span>Key展示名</span>
               <input value={editor.display_name} onChange={(event) => setEditor({ ...editor, display_name: event.target.value })} placeholder="主Key" />
             </label>
-            <label>
-              <span>接入类型</span>
-              <select value={editor.source_type} onChange={(event) => setEditor({ ...editor, source_type: event.target.value })}>
-                <option value="deepseek_balance">DeepSeek官方余额</option>
-                <option value="newapi_admin">New API管理统计</option>
-              </select>
-            </label>
+            {isProviderEditor && (
+              <label>
+                <span>接入类型</span>
+                <select value={editor.source_type} onChange={(event) => setEditor({ ...editor, source_type: event.target.value })}>
+                  <option value="deepseek_balance">DeepSeek官方余额</option>
+                  <option value="newapi_admin">New API管理统计</option>
+                </select>
+              </label>
+            )}
             <label>
               <span>保存ID</span>
               <input className="source-id-input" value={sourceIdPreview} readOnly />
@@ -210,11 +223,13 @@ export function LlmProviderSettings() {
               </label>
             ) : (
               <>
-                <label>
-                  <span>Base URL</span>
-                  <input value={editor.base_url} onChange={(event) => setEditor({ ...editor, base_url: event.target.value })} placeholder="https://your-new-api.example.com" />
-                </label>
-                <label>
+                {isProviderEditor && (
+                  <label>
+                    <span>Base URL</span>
+                    <input value={editor.base_url} onChange={(event) => setEditor({ ...editor, base_url: event.target.value })} placeholder="https://your-new-api.example.com" />
+                  </label>
+                )}
+                <label className="llm-secret-field">
                   <span>访问令牌</span>
                   <input
                     type="password"
@@ -223,10 +238,12 @@ export function LlmProviderSettings() {
                     placeholder={editor.mode === 'edit' ? '留空则保留原密钥' : 'New API access token'}
                   />
                 </label>
-                <label>
-                  <span>User ID</span>
-                  <input value={editor.user_id} onChange={(event) => setEditor({ ...editor, user_id: event.target.value })} placeholder="1" />
-                </label>
+                {isProviderEditor && (
+                  <label>
+                    <span>User ID</span>
+                    <input value={editor.user_id} onChange={(event) => setEditor({ ...editor, user_id: event.target.value })} placeholder="1" />
+                  </label>
+                )}
               </>
             )}
           </div>
@@ -241,6 +258,7 @@ export function LlmProviderSettings() {
         {groups.map((group) => {
           const expanded = Boolean(expandedProviders[group.provider_id])
           const unconfiguredCount = group.items.filter((item) => !isSecretConfigured(item)).length
+          const providerMeta = providerMetadata(group)
           return (
             <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
               <header>
@@ -248,6 +266,8 @@ export function LlmProviderSettings() {
                   <h3>{group.provider_name}</h3>
                   <code>{group.provider_id}</code>
                   <div className="provider-settings-summary">
+                    <span className="provider-source-type">{sourceTypeText(providerMeta.source_type)}</span>
+                    <span className="provider-endpoint">{providerEndpointText(providerMeta)}</span>
                     <span className="provider-key-count">{group.items.length}个Key</span>
                     <span className={`provider-secret-summary ${unconfiguredCount ? 'warning' : 'configured'}`}>
                       {unconfiguredCount ? `${unconfiguredCount}个未配置` : '全部已配置'}
@@ -271,8 +291,6 @@ export function LlmProviderSettings() {
                 <div className="provider-key-list">
                   <div className="provider-key-columns" aria-hidden="true">
                     <span>API Key</span>
-                    <span>接入类型</span>
-                    <span>接口</span>
                     <span>密钥状态</span>
                     <span>操作</span>
                   </div>
@@ -282,8 +300,6 @@ export function LlmProviderSettings() {
                         <strong>{item.display_name}</strong>
                         <code>{item.source_id}</code>
                       </div>
-                      <span>{sourceTypeText(item.source_type)}</span>
-                      <span>{item.base_url || '官方接口'}</span>
                       <span className={isSecretConfigured(item) ? 'secret-status configured' : 'secret-status'}>
                         {isSecretConfigured(item) ? '密钥已配置' : '密钥未配置'}
                       </span>
@@ -331,6 +347,14 @@ function keyIdFromSource(sourceId, providerId) {
 
 function sourceTypeText(sourceType) {
   return sourceType === 'newapi_admin' ? 'New API' : 'DeepSeek'
+}
+
+function providerMetadata(group) {
+  return group.items[0] || {}
+}
+
+function providerEndpointText(item) {
+  return item.source_type === 'newapi_admin' ? item.base_url || '未配置接口' : '官方接口'
 }
 
 function isSecretConfigured(item) {
