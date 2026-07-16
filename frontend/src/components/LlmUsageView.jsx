@@ -109,6 +109,26 @@ export function LlmUsageView({ theme = 'dark' }) {
   const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
   const configGroups = useMemo(() => groupLlmItems(configs), [configs])
   const selectorGroups = configGroups.length ? configGroups : sourceGroups
+  const sourceIdPreview = `${normalizeIdPart(form.provider_id) || 'provider'}-${normalizeIdPart(form.key_id) || 'key'}`
+
+  function handleAddProviderKey(group) {
+    const configGroup = configGroups.find((item) => item.provider_id === group.provider_id)
+    const template = configGroup?.items[0] || group.items[0] || {}
+    const nextIndex = (configGroup?.items.length || group.items.length || 0) + 1
+    setForm({
+      provider_id: group.provider_id,
+      provider_name: group.provider_name,
+      key_id: `key-${nextIndex}`,
+      source_type: template.source_type || 'deepseek_balance',
+      display_name: `Key ${nextIndex}`,
+      base_url: template.base_url || '',
+      api_key: '',
+      access_token: '',
+      user_id: template.user_id || '1',
+    })
+    setShowConfig(true)
+    setExpandedProviders((current) => ({ ...current, [group.provider_id]: true }))
+  }
 
   return (
     <section className="llm-view">
@@ -132,13 +152,13 @@ export function LlmUsageView({ theme = 'dark' }) {
             </optgroup>
           ))}
         </select>
-        <button className="glow-button" onClick={() => setShowConfig(!showConfig)}>{showConfig ? '收起配置' : '添加来源'}</button>
+        <button className="glow-button" onClick={() => setShowConfig(!showConfig)}>{showConfig ? '收起配置' : '添加API Key'}</button>
         <button className="glow-button" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '刷新中' : '手动刷新'}</button>
       </div>
 
       {showConfig && (
         <form className="llm-config-card" onSubmit={handleSaveConfig}>
-          <div className="table-title">配置 LLM 来源</div>
+          <div className="table-title">添加API Key</div>
           <div className="config-grid">
             <label>
               <span>供应商ID</span>
@@ -181,11 +201,15 @@ export function LlmUsageView({ theme = 'dark' }) {
                   <input type="password" value={form.access_token} onChange={(event) => setForm({ ...form, access_token: event.target.value })} placeholder="New API access token" />
                 </label>
                 <label>
-                  <span>User ID</span>
-                  <input value={form.user_id} onChange={(event) => setForm({ ...form, user_id: event.target.value })} placeholder="1" />
-                </label>
-              </>
+                <span>User ID</span>
+                <input value={form.user_id} onChange={(event) => setForm({ ...form, user_id: event.target.value })} placeholder="1" />
+              </label>
+            </>
             )}
+            <div className="source-id-preview">
+              <span>保存ID</span>
+              <strong>{sourceIdPreview}</strong>
+            </div>
           </div>
           <footer className="config-footer">
             <span>密钥只写入本地 .env，不回显到前端。</span>
@@ -195,7 +219,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       )}
 
       <div className="configured-strip">
-        <span>来源</span>
+        <span>API Key</span>
         <button className={source === '' ? 'active' : ''} onClick={() => setSource('')}>全部</button>
         {configGroups.map((group) => (
           <div className="configured-group" key={group.provider_id}>
@@ -226,6 +250,7 @@ export function LlmUsageView({ theme = 'dark' }) {
             expanded={expandedProviders[group.provider_id]}
             onToggle={() => setExpandedProviders((current) => ({ ...current, [group.provider_id]: !current[group.provider_id] }))}
             onSelectKey={(sourceId) => setSource(sourceId)}
+            onAddKey={handleAddProviderKey}
           />
         ))}
         {sources.length === 0 && <div className="empty-panel">暂无 LLM 来源数据，保存配置后点击手动刷新。</div>}
@@ -241,7 +266,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   )
 }
 
-function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) {
+function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey, onAddKey }) {
   const active = group.items.some((item) => item.source_id === activeSource)
   const status = aggregateStatus(group.items)
   const open = expanded || active
@@ -253,7 +278,19 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) 
           <h3>{group.provider_name}</h3>
           <p>{group.provider_id}</p>
         </div>
-        <span className={`llm-status ${status}`}>{statusText(status)}</span>
+        <div className="llm-source-actions">
+          <span className={`llm-status ${status}`}>{statusText(status)}</span>
+          <button
+            type="button"
+            className="mini-action"
+            onClick={(event) => {
+              event.stopPropagation()
+              onAddKey(group)
+            }}
+          >
+            添加Key
+          </button>
+        </div>
       </div>
       <div className="llm-source-metrics">
         <div>

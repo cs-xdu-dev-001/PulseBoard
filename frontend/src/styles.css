@@ -709,6 +709,14 @@ footer {
   gap: 16px;
 }
 
+.llm-source-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .llm-source-top h3 {
   margin: 10px 0 4px;
   color: #e8fbff;
@@ -731,6 +739,17 @@ footer {
 .llm-status.online {
   color: #39ff9d;
   background: rgba(57, 255, 157, 0.1);
+}
+
+.mini-action {
+  min-height: 32px;
+  border: 1px solid rgba(57, 255, 157, 0.3);
+  border-radius: 999px;
+  background: rgba(57, 255, 157, 0.1);
+  color: #dffff0;
+  padding: 0 11px;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(57, 255, 157, 0.12);
 }
 
 .llm-source-metrics {
@@ -908,6 +927,28 @@ footer {
   background: rgba(10, 17, 31, 0.88);
   color: #e8fbff;
   padding: 0 12px;
+}
+
+.source-id-preview {
+  display: grid;
+  align-content: center;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid rgba(139, 220, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 14, 26, 0.72);
+}
+
+.source-id-preview span {
+  color: #8fa6b8;
+  font-size: 12px;
+}
+
+.source-id-preview strong {
+  overflow: hidden;
+  color: #39ff9d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .config-footer {
@@ -1148,7 +1189,8 @@ footer {
 :root[data-theme="light"] .chip,
 :root[data-theme="light"] .status-label,
 :root[data-theme="light"] .llm-status,
-:root[data-theme="light"] .configured-strip button {
+:root[data-theme="light"] .configured-strip button,
+:root[data-theme="light"] .mini-action {
   border-color: rgba(15, 34, 51, 0.08);
   background: rgba(15, 34, 51, 0.05);
   color: #536a7f;
@@ -1175,10 +1217,19 @@ footer {
 :root[data-theme="light"] .config-grid input,
 :root[data-theme="light"] .config-grid select,
 :root[data-theme="light"] .llm-toolbar select,
-:root[data-theme="light"] .llm-key-row {
+:root[data-theme="light"] .llm-key-row,
+:root[data-theme="light"] .source-id-preview {
   border-color: rgba(15, 34, 51, 0.12);
   background: rgba(255, 255, 255, 0.84);
   color: #0f2233;
+}
+
+:root[data-theme="light"] .source-id-preview span {
+  color: #536a7f;
+}
+
+:root[data-theme="light"] .source-id-preview strong {
+  color: #008f6d;
 }
 
 :root[data-theme="light"] .bar {
