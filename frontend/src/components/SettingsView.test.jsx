@@ -34,6 +34,17 @@ const llmSources = [
     has_api_key: true,
     has_access_token: false,
   },
+  {
+    source_id: 'academic-main',
+    provider_id: 'academic',
+    provider_name: 'Academic Gateway',
+    display_name: '主账号',
+    source_type: 'newapi_admin',
+    base_url: 'https://gateway.example.com',
+    user_id: '1',
+    has_api_key: true,
+    has_access_token: false,
+  },
 ]
 
 describe('Settings LLM供应商配置', () => {
@@ -47,12 +58,14 @@ describe('Settings LLM供应商配置', () => {
     saveLlmConfig.mockResolvedValue({ ok: true })
   })
 
-  it('将同一供应商的多个Key显示在一个分组中', async () => {
+  it('默认折叠供应商并在展开后显示多个Key', async () => {
     render(<SettingsView />)
 
     expect(await screen.findByRole('heading', { name: 'LLM供应商' })).toBeVisible()
     const provider = screen.getByTestId('llm-provider-deepseek')
     expect(within(provider).getByText('2个Key')).toBeVisible()
+    expect(within(provider).queryByText('主Key')).not.toBeInTheDocument()
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
     expect(within(provider).getByText('主Key')).toBeVisible()
     expect(within(provider).getByText('备用Key')).toBeVisible()
   })
@@ -82,6 +95,7 @@ describe('Settings LLM供应商配置', () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
     fireEvent.click(within(provider).getByRole('button', { name: '编辑 主Key' }))
 
     expect(screen.getByLabelText('供应商ID')).toHaveAttribute('readonly')
@@ -89,5 +103,13 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('保存ID')).toHaveValue('deepseek-main')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
     expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '留空则保留原密钥')
+  })
+
+  it('New API只按访问令牌判断密钥状态', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-academic')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
+    expect(within(provider).getByText('密钥未配置')).toBeVisible()
   })
 })

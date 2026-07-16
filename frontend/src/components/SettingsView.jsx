@@ -7,29 +7,31 @@ const sections = [
     title: '基础运行',
     fields: [
       ['PULSEBOARD_DATABASE_URL', 'Database URL'],
-      ['PULSEBOARD_COLLECTION_INTERVAL_SECONDS', 'GPU 采集间隔'],
       ['PULSEBOARD_RETENTION_DAYS', '数据保留天数'],
       ['PULSEBOARD_LAB_TIMEZONE', '实验室时区'],
     ],
   },
   {
-    title: 'GPU来源',
-    fields: [['PULSEBOARD_SOURCE_URL', '实验室 GPU API']],
-  },
-  {
-    title: 'VPS节点',
+    title: '采集频率',
     fields: [
-      ['PULSEBOARD_NODE_EXPORTERS', 'node_exporter 节点'],
-      ['PULSEBOARD_NODE_EXPORTER_INTERVAL_SECONDS', 'VPS 采集间隔'],
-      ['PULSEBOARD_TRAFFIC_QUOTA_NODE', '流量配额节点'],
-      ['PULSEBOARD_TRAFFIC_QUOTA_TOTAL_GB', '流量总额 GB'],
-      ['PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB', '周期初始已用 GB'],
-      ['PULSEBOARD_TRAFFIC_QUOTA_RESET_DAY', '每月重置日'],
+      ['PULSEBOARD_COLLECTION_INTERVAL_SECONDS', 'GPU采集间隔（秒）'],
+      ['PULSEBOARD_NODE_EXPORTER_INTERVAL_SECONDS', 'VPS采集间隔（秒）'],
+      ['PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS', 'LLM采集间隔（秒）'],
     ],
   },
   {
-    title: 'LLM采集',
-    fields: [['PULSEBOARD_LLM_USAGE_INTERVAL_SECONDS', 'LLM采集间隔（秒）']],
+    title: 'GPU来源',
+    fields: [['PULSEBOARD_SOURCE_URL', '实验室GPU API']],
+  },
+  {
+    title: 'VPS与流量',
+    fields: [
+      ['PULSEBOARD_NODE_EXPORTERS', 'node_exporter 节点'],
+      ['PULSEBOARD_TRAFFIC_QUOTA_NODE', '流量配额节点'],
+      ['PULSEBOARD_TRAFFIC_QUOTA_TOTAL_GB', '流量总额（GB）'],
+      ['PULSEBOARD_TRAFFIC_QUOTA_INITIAL_USED_GB', '周期初始已用（GB）'],
+      ['PULSEBOARD_TRAFFIC_QUOTA_RESET_DAY', '每月重置日'],
+    ],
   },
 ]
 

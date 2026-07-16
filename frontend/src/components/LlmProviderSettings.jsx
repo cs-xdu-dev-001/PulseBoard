@@ -19,6 +19,7 @@ const emptyForm = {
 export function LlmProviderSettings() {
   const [configs, setConfigs] = useState([])
   const [editor, setEditor] = useState(null)
+  const [expandedProviders, setExpandedProviders] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -219,34 +220,57 @@ export function LlmProviderSettings() {
       )}
 
       <div className="provider-settings-list">
-        {groups.map((group) => (
-          <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
-            <header>
-              <div className="provider-settings-identity">
-                <h3>{group.provider_name}</h3>
-                <code>{group.provider_id}</code>
-                <span>{group.items.length}个Key</span>
-              </div>
-              <button className="subtle-button" type="button" onClick={() => openNewKey(group)}>添加Key</button>
-            </header>
-            <div className="provider-key-list">
-              {group.items.map((item) => (
-                <div className="provider-key-row" key={item.source_id}>
-                  <div className="provider-key-name">
-                    <strong>{item.display_name}</strong>
-                    <code>{item.source_id}</code>
-                  </div>
-                  <span>{sourceTypeText(item.source_type)}</span>
-                  <span>{item.base_url || '官方接口'}</span>
-                  <span className={item.has_api_key || item.has_access_token ? 'secret-status configured' : 'secret-status'}>
-                    {item.has_api_key || item.has_access_token ? '密钥已配置' : '密钥未配置'}
-                  </span>
-                  <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEdit(item)}>编辑</button>
+        {groups.map((group) => {
+          const expanded = Boolean(expandedProviders[group.provider_id])
+          return (
+            <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
+              <header>
+                <div className="provider-settings-identity">
+                  <h3>{group.provider_name}</h3>
+                  <code>{group.provider_id}</code>
+                  <span>{group.items.length}个Key</span>
                 </div>
-              ))}
-            </div>
-          </article>
-        ))}
+                <div className="provider-settings-actions">
+                  <button
+                    className="provider-toggle"
+                    type="button"
+                    aria-label={`${expanded ? '收起' : '展开'}${group.provider_name}的Key`}
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedProviders((current) => ({ ...current, [group.provider_id]: !expanded }))}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                  <button className="subtle-button" type="button" onClick={() => openNewKey(group)}>添加Key</button>
+                </div>
+              </header>
+              {expanded && (
+                <div className="provider-key-list">
+                  <div className="provider-key-columns" aria-hidden="true">
+                    <span>API Key</span>
+                    <span>接入类型</span>
+                    <span>接口</span>
+                    <span>密钥状态</span>
+                    <span>操作</span>
+                  </div>
+                  {group.items.map((item) => (
+                    <div className="provider-key-row" key={item.source_id}>
+                      <div className="provider-key-name">
+                        <strong>{item.display_name}</strong>
+                        <code>{item.source_id}</code>
+                      </div>
+                      <span>{sourceTypeText(item.source_type)}</span>
+                      <span>{item.base_url || '官方接口'}</span>
+                      <span className={isSecretConfigured(item) ? 'secret-status configured' : 'secret-status'}>
+                        {isSecretConfigured(item) ? '密钥已配置' : '密钥未配置'}
+                      </span>
+                      <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEdit(item)}>编辑</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          )
+        })}
         {!loading && groups.length === 0 && <div className="settings-empty">尚未配置LLM供应商。</div>}
         {loading && <div className="settings-empty">正在读取LLM配置</div>}
       </div>
@@ -278,4 +302,8 @@ function keyIdFromSource(sourceId, providerId) {
 
 function sourceTypeText(sourceType) {
   return sourceType === 'newapi_admin' ? 'New API' : 'DeepSeek'
+}
+
+function isSecretConfigured(item) {
+  return item.source_type === 'newapi_admin' ? item.has_access_token : item.has_api_key
 }
