@@ -269,9 +269,13 @@ def delete_llm_usage_provider(provider_id: str) -> dict:
 
 @router.get("/llm/usage/sources")
 def llm_usage_sources(db: Session = Depends(get_db)) -> dict:
-    sources = db.scalars(select(LlmUsageSource).order_by(LlmUsageSource.display_name)).all()
-    configs = {config["source_id"]: config for config in list_llm_usage_config(get_settings())}
-    return {"sources": [_llm_source_payload(source, configs.get(source.source_id)) for source in sources]}
+    config_items = list_llm_usage_config(get_settings())
+    source_ids = [config["source_id"] for config in config_items]
+    rows = []
+    if source_ids:
+        rows = db.scalars(select(LlmUsageSource).where(LlmUsageSource.source_id.in_(source_ids))).all()
+    sources_by_id = {source.source_id: source for source in rows}
+    return {"sources": [_llm_source_payload(sources_by_id.get(config["source_id"]), config) for config in config_items]}
 
 
 @router.get("/llm/usage/summary")
@@ -280,7 +284,7 @@ def llm_usage_summary(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    snapshots = _latest_llm_snapshots(db, range, source)
+    snapshots = _latest_llm_snapshots(db, range, source, _configured_llm_source_ids())
     request_count = sum(point.request_count or 0 for point in snapshots)
     token_count = sum(point.token_count or 0 for point in snapshots)
     amount = sum(point.estimated_amount or 0 for point in snapshots)
@@ -307,7 +311,7 @@ def llm_usage_series(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    rows = _llm_snapshots(db, range, source)
+    rows = _llm_snapshots(db, range, source, _configured_llm_source_ids())
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
     for row in rows:
@@ -371,7 +375,7 @@ def llm_usage_models(
     db: Session = Depends(get_db),
 ) -> dict:
     totals: dict[str, dict] = {}
-    for snapshot in _latest_llm_snapshots(db, range, source):
+    for snapshot in _latest_llm_snapshots(db, range, source, _configured_llm_source_ids()):
         for item in snapshot.model_stats or []:
             model = item.get("model") or "unknown"
             total = totals.setdefault(
@@ -536,7 +540,16 @@ def _llm_range_bounds(range_value: str) -> tuple[datetime, datetime]:
     return until - timedelta(hours=24), until
 
 
-def _llm_snapshots(db: Session, range_value: str, source_id: str | None) -> list[LlmUsageSnapshot]:
+def _configured_llm_source_ids() -> list[str]:
+    return [config["source_id"] for config in list_llm_usage_config(get_settings())]
+
+
+def _llm_snapshots(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None = None,
+) -> list[LlmUsageSnapshot]:
     since, until = _llm_range_bounds(range_value)
     stmt = (
         select(LlmUsageSnapshot)
@@ -545,40 +558,54 @@ def _llm_snapshots(db: Session, range_value: str, source_id: str | None) -> list
         .order_by(LlmUsageSnapshot.collected_at)
     )
     if source_id:
+        if configured_source_ids is not None and source_id not in configured_source_ids:
+            return []
         stmt = stmt.where(LlmUsageSource.source_id == source_id)
+    elif configured_source_ids is not None:
+        if not configured_source_ids:
+            return []
+        stmt = stmt.where(LlmUsageSource.source_id.in_(configured_source_ids))
     return db.scalars(stmt).all()
 
 
-def _latest_llm_snapshots(db: Session, range_value: str, source_id: str | None) -> list[LlmUsageSnapshot]:
+def _latest_llm_snapshots(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None = None,
+) -> list[LlmUsageSnapshot]:
     latest = {}
-    for snapshot in _llm_snapshots(db, range_value, source_id):
+    for snapshot in _llm_snapshots(db, range_value, source_id, configured_source_ids):
         latest[snapshot.source_id] = snapshot
     return list(latest.values())
 
 
-def _llm_source_payload(source: LlmUsageSource, config: dict | None = None) -> dict:
-    is_newapi = source.source_type == "newapi_admin"
+def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = None) -> dict:
+    source_type = config.get("source_type") if config else source.source_type
+    is_newapi = source_type == "newapi_admin"
     provider_id = config.get("provider_id") if config else source.source_id
     provider_name = config.get("provider_name") if config else source.display_name
+    source_id = config.get("source_id") if config else source.source_id
+    display_name = config.get("display_name") if config else source.display_name
     return {
-        "id": source.id,
-        "source_id": source.source_id,
-        "provider_id": provider_id or source.source_id,
-        "provider_name": provider_name or source.display_name,
-        "display_name": source.display_name,
-        "source_type": source.source_type,
-        "status": source.status,
-        "last_checked_at": _iso(source.last_checked_at),
-        "last_error": source.last_error,
-        "balance_currency": source.balance_currency,
-        "balance_total": source.balance_total,
-        "balance_granted": source.balance_granted,
-        "balance_topped_up": source.balance_topped_up,
-        "quota_total": source.quota_total,
-        "quota_used": source.quota_used,
-        "quota_remaining": source.quota_remaining,
-        "quota_used_usd": estimate_snapshot_cost_usd(raw_quota=source.quota_used) if is_newapi else None,
-        "quota_remaining_usd": estimate_snapshot_cost_usd(raw_quota=source.quota_remaining) if is_newapi else None,
+        "id": source.id if source else None,
+        "source_id": source_id,
+        "provider_id": provider_id or source_id,
+        "provider_name": provider_name or display_name,
+        "display_name": display_name,
+        "source_type": source_type,
+        "status": source.status if source else "unknown",
+        "last_checked_at": _iso(source.last_checked_at) if source else None,
+        "last_error": source.last_error if source else None,
+        "balance_currency": source.balance_currency if source else None,
+        "balance_total": source.balance_total if source else None,
+        "balance_granted": source.balance_granted if source else None,
+        "balance_topped_up": source.balance_topped_up if source else None,
+        "quota_total": source.quota_total if source else None,
+        "quota_used": source.quota_used if source else None,
+        "quota_remaining": source.quota_remaining if source else None,
+        "quota_used_usd": estimate_snapshot_cost_usd(raw_quota=source.quota_used) if is_newapi and source else None,
+        "quota_remaining_usd": estimate_snapshot_cost_usd(raw_quota=source.quota_remaining) if is_newapi and source else None,
     }
 
 

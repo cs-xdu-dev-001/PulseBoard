@@ -91,6 +91,124 @@ def test_llm_usage_sources_do_not_expose_secrets():
     assert "api_key" not in payload["sources"][0]
 
 
+def test_llm_usage_sources_follow_config_not_stale_database_rows(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic-key-3,deepseek-main",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_PROVIDER_NAME=EduModel",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_DISPLAY_NAME=Blog",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_ACCESS_TOKEN=secret",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=codex",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.llm_usage.ROOT_DIR", tmp_path)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        db.add_all(
+            [
+                LlmUsageSource(
+                    source_id="academic",
+                    display_name="Academic Gateway",
+                    source_type="newapi_admin",
+                    status="online",
+                    last_checked_at=now,
+                ),
+                LlmUsageSource(
+                    source_id="academic-key-3",
+                    display_name="Old Blog",
+                    source_type="newapi_admin",
+                    status="online",
+                    last_checked_at=now,
+                ),
+            ]
+        )
+        db.commit()
+
+    payload = client.get("/api/llm/usage/sources").json()
+
+    assert [item["source_id"] for item in payload["sources"]] == ["academic-key-3", "deepseek-main"]
+    assert payload["sources"][0]["provider_name"] == "EduModel"
+    assert payload["sources"][0]["display_name"] == "Blog"
+    assert payload["sources"][0]["status"] == "online"
+    assert payload["sources"][1]["provider_name"] == "DeepSeek"
+    assert payload["sources"][1]["display_name"] == "codex"
+    assert payload["sources"][1]["status"] == "unknown"
+    assert all(item["source_id"] != "academic" for item in payload["sources"])
+
+
+def test_llm_usage_aggregates_ignore_unconfigured_database_rows(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=active-key",
+                "PULSEBOARD_LLM_ACTIVE_KEY_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACTIVE_KEY_PROVIDER_ID=active",
+                "PULSEBOARD_LLM_ACTIVE_KEY_PROVIDER_NAME=Active",
+                "PULSEBOARD_LLM_ACTIVE_KEY_DISPLAY_NAME=Active Key",
+                "PULSEBOARD_LLM_ACTIVE_KEY_ACCESS_TOKEN=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.llm_usage.ROOT_DIR", tmp_path)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        active = LlmUsageSource(source_id="active-key", display_name="Active Key", source_type="newapi_admin", status="online")
+        stale = LlmUsageSource(source_id="stale-key", display_name="Stale Key", source_type="newapi_admin", status="online")
+        db.add_all([active, stale])
+        db.flush()
+        db.add_all(
+            [
+                LlmUsageSnapshot(
+                    source_id=active.id,
+                    collected_at=now,
+                    range_key="latest",
+                    request_count=10,
+                    token_count=100,
+                    quota_used=1,
+                    estimated_amount=1,
+                    model_stats=[{"model": "active-model", "request_count": 10, "amount": 1}],
+                    raw_summary={},
+                ),
+                LlmUsageSnapshot(
+                    source_id=stale.id,
+                    collected_at=now,
+                    range_key="latest",
+                    request_count=90,
+                    token_count=900,
+                    quota_used=9,
+                    estimated_amount=9,
+                    model_stats=[{"model": "stale-model", "request_count": 90, "amount": 9}],
+                    raw_summary={},
+                ),
+            ]
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=24h").json()
+    models = client.get("/api/llm/usage/models?range=24h").json()
+    series = client.get("/api/llm/usage/series?range=24h").json()
+
+    assert summary["request_count"] == 10
+    assert [item["model"] for item in models["models"]] == ["active-model"]
+    assert [item["source_id"] for item in series["series"]] == ["active-key"]
+
+
 def test_llm_usage_summary_and_models_return_aggregates():
     client, session_factory = make_client()
     seed_llm(session_factory)
