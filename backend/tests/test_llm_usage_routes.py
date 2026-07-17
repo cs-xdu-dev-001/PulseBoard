@@ -139,6 +139,48 @@ def test_save_llm_usage_config_returns_422_detail(monkeypatch):
     assert response.json()["detail"] == "source_id deepseek_main conflicts with existing source_id deepseek-main"
 
 
+def test_save_llm_usage_config_route_reads_updated_env_file_without_restart(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic",
+                "PULSEBOARD_LLM_ACADEMIC_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME=Academic",
+                "PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN=old-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.llm_usage.ROOT_DIR", tmp_path)
+    monkeypatch.setenv("PULSEBOARD_LLM_USAGE_SOURCES", "academic")
+    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_KEY_3_ACCESS_TOKEN", "stale-token")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(
+        "/api/llm/usage/config",
+        json={
+            "source_id": "academic-key-3",
+            "source_type": "newapi_admin",
+            "provider_id": "academic",
+            "provider_name": "Academic",
+            "display_name": "Key 3",
+            "base_url": "https://new-api.example.com",
+            "access_token": "new-token",
+            "user_id": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = client.get("/api/llm/usage/config").json()
+    source_ids = [item["source_id"] for item in payload["sources"]]
+    key_3 = next(item for item in payload["sources"] if item["source_id"] == "academic-key-3")
+    assert source_ids == ["academic", "academic-key-3"]
+    assert key_3["display_name"] == "Key 3"
+    assert key_3["has_access_token"] is True
+
+
 def test_delete_llm_usage_config_route(monkeypatch):
     calls = []
 

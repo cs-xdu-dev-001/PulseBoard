@@ -15,14 +15,23 @@ from app.llm_usage import (
 from app.llm_pricing import estimate_model_cost_usd
 
 
-def test_load_llm_usage_configs_supports_custom_source_ids(monkeypatch):
-    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_TYPE", "newapi_admin")
-    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME", "Academic Gateway")
-    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_BASE_URL", "https://new-api.example.com")
-    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN", "secret")
+def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_ACADEMIC_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME=Academic Gateway",
+                "PULSEBOARD_LLM_ACADEMIC_BASE_URL=https://new-api.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     settings = Settings(llm_usage_sources="academic")
-    configs = load_llm_usage_configs(settings)
+    configs = load_llm_usage_configs(settings, env_path=env_path)
 
     assert configs[0].source_id == "academic"
     assert configs[0].display_name == "Academic Gateway"
@@ -142,6 +151,35 @@ def test_save_llm_usage_config_rejects_env_prefix_collision(tmp_path):
         )
 
 
+def test_load_llm_usage_configs_prefers_updated_env_file_over_process_environment(tmp_path, monkeypatch):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic,academic-key-3",
+                "PULSEBOARD_LLM_ACADEMIC_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME=Academic",
+                "PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN=old-token",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_DISPLAY_NAME=Key 3",
+                "PULSEBOARD_LLM_ACADEMIC_KEY_3_ACCESS_TOKEN=new-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PULSEBOARD_LLM_USAGE_SOURCES", "academic")
+    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN", "stale-token")
+    monkeypatch.setenv("PULSEBOARD_LLM_ACADEMIC_KEY_3_ACCESS_TOKEN", "stale-missing-token")
+
+    configs = load_llm_usage_configs(Settings(llm_usage_sources="academic"), env_path=env_path)
+
+    assert [config.source_id for config in configs] == ["academic", "academic-key-3"]
+    assert configs[0].access_token == "old-token"
+    assert configs[1].display_name == "Key 3"
+    assert configs[1].access_token == "new-token"
+
+
 def test_delete_llm_usage_config_removes_source_and_secret(tmp_path):
     env_path = tmp_path / "test.env"
     env_path.write_text(
@@ -239,13 +277,22 @@ def test_update_llm_provider_config_updates_shared_fields(tmp_path):
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=main-token" in text
 
 
-def test_list_llm_usage_config_masks_secret(monkeypatch):
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_TYPE", "deepseek_balance")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_DISPLAY_NAME", "DeepSeek")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_API_KEY", "secret")
+def test_list_llm_usage_config_masks_secret(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_DEEPSEEK_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_DISPLAY_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_API_KEY=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     settings = Settings(llm_usage_sources="deepseek")
-    result = list_llm_usage_config(settings)
+    result = list_llm_usage_config(settings, env_path=env_path)
 
     assert result[0]["source_id"] == "deepseek"
     assert result[0]["provider_id"] == "deepseek"
@@ -254,15 +301,24 @@ def test_list_llm_usage_config_masks_secret(monkeypatch):
     assert "api_key" not in result[0]
 
 
-def test_list_llm_usage_config_returns_provider_group_metadata(monkeypatch):
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE", "deepseek_balance")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID", "deepseek")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME", "DeepSeek")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME", "主Key")
-    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY", "secret")
+def test_list_llm_usage_config_returns_provider_group_metadata(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     settings = Settings(llm_usage_sources="deepseek-main")
-    result = list_llm_usage_config(settings)
+    result = list_llm_usage_config(settings, env_path=env_path)
 
     assert result[0]["source_id"] == "deepseek-main"
     assert result[0]["provider_id"] == "deepseek"

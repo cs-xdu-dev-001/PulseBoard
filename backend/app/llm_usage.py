@@ -49,10 +49,11 @@ class LlmUsageResult:
     error: str | None = None
 
 
-def load_llm_usage_configs(settings: Settings) -> list[LlmUsageConfig]:
-    env = _merged_env(ROOT_DIR / ".env")
+def load_llm_usage_configs(settings: Settings, env_path: Path | None = None) -> list[LlmUsageConfig]:
+    env = _merged_env(env_path or ROOT_DIR / ".env")
     configs = []
-    for source_id in [item.strip() for item in settings.llm_usage_sources.split(",") if item.strip()]:
+    source_list = env.get("PULSEBOARD_LLM_USAGE_SOURCES") or settings.llm_usage_sources
+    for source_id in [item.strip() for item in source_list.split(",") if item.strip()]:
         prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
         source_type = env.get(prefix + "TYPE", "").strip()
         display_name = env.get(prefix + "DISPLAY_NAME", "").strip() or source_id
@@ -76,7 +77,7 @@ def load_llm_usage_configs(settings: Settings) -> list[LlmUsageConfig]:
     return configs
 
 
-def list_llm_usage_config(settings: Settings) -> list[dict[str, Any]]:
+def list_llm_usage_config(settings: Settings, env_path: Path | None = None) -> list[dict[str, Any]]:
     return [
         {
             "source_id": config.source_id,
@@ -89,7 +90,7 @@ def list_llm_usage_config(settings: Settings) -> list[dict[str, Any]]:
             "has_api_key": bool(config.api_key),
             "has_access_token": bool(config.access_token),
         }
-        for config in load_llm_usage_configs(settings)
+        for config in load_llm_usage_configs(settings, env_path=env_path)
     ]
 
 
@@ -297,7 +298,7 @@ def error_result(config: LlmUsageConfig, message: str) -> LlmUsageResult:
 
 
 def _merged_env(env_path: Path) -> dict[str, str]:
-    result = {}
+    result = dict(os.environ)
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -305,7 +306,6 @@ def _merged_env(env_path: Path) -> dict[str, str]:
                 continue
             key, value = line.split("=", 1)
             result[key.strip()] = value.strip().strip('"')
-    result.update(os.environ)
     return result
 
 
