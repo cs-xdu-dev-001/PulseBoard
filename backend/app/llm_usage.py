@@ -304,7 +304,10 @@ def deepseek_balance_url() -> str:
 
 
 def newapi_url(base_url: str, path: str) -> str:
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        normalized = normalized[:-3]
+    return urljoin(normalized + "/", path.lstrip("/"))
 
 
 def normalize_deepseek_balance(config: LlmUsageConfig, payload: dict[str, Any]) -> LlmUsageResult:

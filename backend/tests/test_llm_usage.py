@@ -186,6 +186,18 @@ def test_collect_newapi_uses_user_scoped_log_endpoints(monkeypatch):
     assert result.estimated_amount == 0.041336
 
 
+def test_newapi_admin_url_accepts_openai_compatible_v1_base_url():
+    assert llm_usage.newapi_url("https://gateway.example.com/v1", "/api/user/self") == (
+        "https://gateway.example.com/api/user/self"
+    )
+    assert llm_usage.newapi_url("https://gateway.example.com/v1/", "/api/log/self/stat") == (
+        "https://gateway.example.com/api/log/self/stat"
+    )
+    assert llm_usage.newapi_url("https://gateway.example.com", "/api/user/self") == (
+        "https://gateway.example.com/api/user/self"
+    )
+
+
 def test_collect_newapi_reports_success_false_payloads(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):
