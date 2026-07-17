@@ -67,6 +67,14 @@ export async function deleteLlmConfig(sourceId) {
   return response.json()
 }
 
+export async function testLlmConfig(sourceId) {
+  const response = await fetch(`${API_BASE}/api/llm/usage/config/${encodeURIComponent(sourceId)}/test`, { method: 'POST' })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.json()
+}
+
 export async function updateLlmProvider(providerId, payload) {
   const response = await fetch(`${API_BASE}/api/llm/usage/providers/${encodeURIComponent(providerId)}`, {
     method: 'PATCH',

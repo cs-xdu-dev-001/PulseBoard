@@ -714,6 +714,7 @@ footer {
 .provider-settings-summary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-self: end;
   justify-content: flex-end;
   gap: 10px;
@@ -724,12 +725,14 @@ footer {
 
 .provider-source-type,
 .provider-endpoint,
+.provider-model-config,
 .provider-key-count {
   color: #82a4ba;
 }
 
 .provider-source-type,
-.provider-endpoint {
+.provider-endpoint,
+.provider-model-config {
   overflow: hidden;
   max-width: 240px;
   text-overflow: ellipsis;
@@ -738,6 +741,10 @@ footer {
 
 .provider-source-type {
   color: #8bdcff;
+}
+
+.provider-model-config {
+  color: #b9a8ff;
 }
 
 .provider-secret-summary.configured {
@@ -795,7 +802,7 @@ footer {
 .provider-key-columns,
 .provider-key-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 118px minmax(164px, auto);
+  grid-template-columns: minmax(160px, 1fr) 118px minmax(220px, 0.9fr) minmax(224px, auto);
   align-items: center;
   gap: 14px;
   padding: 0 20px;
@@ -809,7 +816,7 @@ footer {
 }
 
 .provider-key-row {
-  min-height: 66px;
+  min-height: 78px;
   border-top: 1px solid rgba(139, 220, 255, 0.08);
   background: rgba(255, 255, 255, 0.012);
   color: #cfe1ec;
@@ -845,6 +852,55 @@ footer {
   color: #39ff9d;
 }
 
+.key-test-status {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.connection-result {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.connection-label {
+  color: #82a4ba;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.connection-status {
+  color: #7890a3;
+  font-weight: 750;
+}
+
+.connection-status.online {
+  color: #39ff9d;
+}
+
+.connection-status.degraded,
+.connection-status.testing,
+.connection-status.not_configured {
+  color: #ffd166;
+}
+
+.connection-status.offline,
+.connection-status.error {
+  color: #ff9eea;
+}
+
+.key-test-status p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #ffb8e9;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .provider-key-actions {
   display: flex;
   justify-content: flex-end;
@@ -861,6 +917,11 @@ footer {
   padding: 0 13px;
   cursor: pointer;
   transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1), opacity 160ms ease, box-shadow 160ms ease;
+}
+
+.subtle-button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .danger-button {
@@ -1573,6 +1634,7 @@ footer {
 }
 
 :root[data-theme="light"] .provider-endpoint,
+:root[data-theme="light"] .provider-model-config,
 :root[data-theme="light"] .provider-key-count {
   color: #60798d;
 }
@@ -1587,6 +1649,26 @@ footer {
 
 :root[data-theme="light"] .secret-status {
   color: #b4237c;
+}
+
+:root[data-theme="light"] .connection-status.online {
+  color: #008f6d;
+}
+
+:root[data-theme="light"] .connection-status.degraded,
+:root[data-theme="light"] .connection-status.testing,
+:root[data-theme="light"] .connection-status.not_configured {
+  color: #936400;
+}
+
+:root[data-theme="light"] .connection-status.offline,
+:root[data-theme="light"] .connection-status.error,
+:root[data-theme="light"] .key-test-status p {
+  color: #b4237c;
+}
+
+:root[data-theme="light"] .connection-label {
+  color: #60798d;
 }
 
 :root[data-theme="light"] .llm-editor-section {
@@ -1757,8 +1839,20 @@ footer {
   }
 
   .provider-key-row > span:nth-child(2)::before {
-    content: "状态：";
+    content: "配置：";
     color: #7890a3;
+  }
+
+  .key-test-status {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .key-test-status::before {
+    content: "连通性";
+    color: #7890a3;
+    font-size: 13px;
+    font-weight: 650;
   }
 
   .provider-key-actions {
@@ -1799,6 +1893,7 @@ footer {
 
   .provider-key-actions {
     grid-column: 1 / -1;
+    grid-row: auto;
     justify-content: stretch;
   }
 

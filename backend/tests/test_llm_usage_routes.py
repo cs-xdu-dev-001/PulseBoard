@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 import app.routes as routes
+from app.llm_usage import LlmUsageConfig, LlmUsageResult
 from app.main import app
 from app.models import LlmUsageSnapshot, LlmUsageSource
 
@@ -257,6 +258,90 @@ def test_save_llm_usage_config_returns_422_detail(monkeypatch):
     assert response.json()["detail"] == "source_id deepseek_main conflicts with existing source_id deepseek-main"
 
 
+def test_llm_usage_config_test_checks_one_source_without_exposing_secrets(monkeypatch):
+    config = LlmUsageConfig(
+        source_id="academic-main",
+        provider_id="academic",
+        provider_name="Academic",
+        display_name="主Key",
+        source_type="newapi_admin",
+        base_url="https://gateway.example.com",
+        api_key="model-secret",
+        access_token="secret-token",
+        user_id="1",
+        request_mode="responses",
+        test_model="gpt-5.4",
+    )
+    calls = []
+
+    monkeypatch.setattr(routes, "load_llm_usage_configs", lambda _settings: [config])
+
+    def fake_collect_source(received_config):
+        calls.append(received_config.source_id)
+        return LlmUsageResult(
+            source_id=received_config.source_id,
+            display_name=received_config.display_name,
+            source_type=received_config.source_type,
+            status="degraded",
+            balance_total=48.86,
+            error=f"统计接口暂不可用 secret-token {'x' * 1200}",
+        )
+
+    monkeypatch.setattr(routes, "collect_source", fake_collect_source)
+
+    def fake_check_model_connection(received_config):
+        calls.append(f"model:{received_config.source_id}")
+        return {
+            "status": "offline",
+            "error": "模型请求失败 model-secret",
+            "request_mode": "responses",
+            "test_model": "gpt-5.4",
+        }
+
+    monkeypatch.setattr(routes, "check_model_connection", fake_check_model_connection)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/api/llm/usage/config/academic-main/test")
+
+    assert response.status_code == 200
+    assert calls == ["academic-main", "model:academic-main"]
+    payload = response.json()
+    assert payload["source_id"] == "academic-main"
+    assert payload["display_name"] == "主Key"
+    assert payload["status"] == "degraded"
+    assert payload["error"].startswith("统计接口暂不可用 [已脱敏]")
+    assert len(payload["error"]) <= 1000
+    assert payload["statistics"]["status"] == "degraded"
+    assert payload["statistics"]["error"].startswith("统计接口暂不可用 [已脱敏]")
+    assert payload["model"] == {
+        "status": "offline",
+        "error": "模型请求失败 [已脱敏]",
+        "request_mode": "responses",
+        "test_model": "gpt-5.4",
+    }
+    assert payload["checked_at"]
+    assert "api_key" not in response.text
+    assert "access_token" not in response.text
+    assert "secret-token" not in response.text
+    assert "model-secret" not in response.text
+
+
+def test_llm_usage_config_test_returns_404_for_unknown_source(monkeypatch):
+    monkeypatch.setattr(routes, "load_llm_usage_configs", lambda _settings: [])
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/api/llm/usage/config/missing-key/test")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "未找到API Key配置：missing-key"
+
+
+def test_llm_usage_test_error_redacts_url_encoded_secrets():
+    message = "上游回显：model%2Bsecret%3D"
+
+    assert routes._sanitize_llm_test_error(message, "model+secret=") == "上游回显：[已脱敏]"
+
+
 def test_save_llm_usage_config_route_reads_updated_env_file_without_restart(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text(
@@ -285,6 +370,9 @@ def test_save_llm_usage_config_route_reads_updated_env_file_without_restart(tmp_
             "provider_name": "Academic",
             "display_name": "Key 3",
             "base_url": "https://new-api.example.com",
+            "request_mode": "responses",
+            "test_model": "gpt-5.4",
+            "api_key": "model-key",
             "access_token": "new-token",
             "user_id": "1",
         },
@@ -296,6 +384,9 @@ def test_save_llm_usage_config_route_reads_updated_env_file_without_restart(tmp_
     key_3 = next(item for item in payload["sources"] if item["source_id"] == "academic-key-3")
     assert source_ids == ["academic", "academic-key-3"]
     assert key_3["display_name"] == "Key 3"
+    assert key_3["request_mode"] == "responses"
+    assert key_3["test_model"] == "gpt-5.4"
+    assert key_3["has_api_key"] is True
     assert key_3["has_access_token"] is True
 
 
@@ -349,6 +440,8 @@ def test_update_llm_provider_config_route(monkeypatch):
             "provider_name": "Academic",
             "source_type": "newapi_admin",
             "base_url": "https://gateway.example.com",
+            "request_mode": "responses",
+            "test_model": "gpt-5.4",
             "user_id": "2",
         },
     )
@@ -362,6 +455,8 @@ def test_update_llm_provider_config_route(monkeypatch):
                 "provider_name": "Academic",
                 "source_type": "newapi_admin",
                 "base_url": "https://gateway.example.com",
+                "request_mode": "responses",
+                "test_model": "gpt-5.4",
                 "user_id": "2",
             },
         )

@@ -72,6 +72,80 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     return normalize_newapi(config, payloads)
 
 
+def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
+    if not config.api_key:
+        return _model_connection_result(config, "not_configured", "模型API Key未配置")
+    if not config.test_model:
+        return _model_connection_result(config, "not_configured", "测试模型未配置")
+
+    base_url = config.base_url
+    if config.source_type == "deepseek_balance":
+        base_url = base_url or "https://api.deepseek.com"
+    if not base_url:
+        return _model_connection_result(config, "not_configured", "模型Base URL未配置")
+
+    if config.request_mode == "responses":
+        resource = "responses"
+        payload = {"model": config.test_model, "input": "Reply with OK only."}
+    elif config.request_mode == "chat_completions":
+        resource = "chat/completions"
+        payload = {
+            "model": config.test_model,
+            "messages": [{"role": "user", "content": "Reply with OK only."}],
+        }
+    else:
+        return _model_connection_result(config, "not_configured", "模型请求方式无效")
+
+    try:
+        response = httpx.post(
+            _model_api_url(base_url, resource),
+            headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return _model_connection_result(config, "offline", _http_status_error_message(exc.response))
+    except Exception as exc:
+        return _model_connection_result(config, "offline", str(exc))
+    return _model_connection_result(config, "online", None)
+
+
+def _model_api_url(base_url: str, resource: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/{resource}"
+    return f"{normalized}/v1/{resource}"
+
+
+def _model_connection_result(config: LlmUsageConfig, status: str, error: str | None) -> dict[str, str | None]:
+    return {
+        "status": status,
+        "error": error,
+        "request_mode": config.request_mode,
+        "test_model": config.test_model,
+    }
+
+
+def _http_status_error_message(response: httpx.Response) -> str:
+    detail = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            detail = error.get("message") or error.get("detail") or error.get("code")
+        elif error:
+            detail = error
+        detail = detail or payload.get("message") or payload.get("detail")
+    if not detail:
+        detail = response.text.strip()
+    prefix = f"HTTP {response.status_code}"
+    return f"{prefix}: {str(detail)[:1000]}" if detail else prefix
+
+
 def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[str, ...], headers: dict[str, str]) -> dict:
     last_error = None
     for path in paths:

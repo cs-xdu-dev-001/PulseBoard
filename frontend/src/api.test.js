@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteLlmConfig, deleteLlmProvider, refreshLlmUsage, saveLlmConfig, saveSettings, updateLlmProvider } from './api.js'
+import { deleteLlmConfig, deleteLlmProvider, refreshLlmUsage, saveLlmConfig, saveSettings, testLlmConfig, updateLlmProvider } from './api.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -68,5 +68,22 @@ describe('API错误详情', () => {
     await deleteLlmProvider('deepseek')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/llm/usage/providers/deepseek', { method: 'DELETE' })
+  })
+
+  it('测试单个Key使用POST并返回连通性结果', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      source_id: 'academic-main',
+      status: 'offline',
+      error: 'Unauthorized, invalid access token',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await testLlmConfig('academic-main')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/llm/usage/config/academic-main/test', { method: 'POST' })
+    expect(result.status).toBe('offline')
   })
 })

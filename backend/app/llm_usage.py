@@ -3,12 +3,25 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from urllib.parse import urljoin
 
 from app.config import ROOT_DIR, Settings
 from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
+
+_ENV_UPDATE_LOCK = RLock()
+
+
+def _serialized_env_update(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        with _ENV_UPDATE_LOCK:
+            return function(*args, **kwargs)
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -22,6 +35,8 @@ class LlmUsageConfig:
     api_key: str | None = None
     access_token: str | None = None
     user_id: str = "1"
+    request_mode: str = "responses"
+    test_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +67,11 @@ class LlmUsageResult:
 def load_llm_usage_configs(settings: Settings, env_path: Path | None = None) -> list[LlmUsageConfig]:
     env = _merged_env(env_path or ROOT_DIR / ".env")
     configs = []
-    source_list = env.get("PULSEBOARD_LLM_USAGE_SOURCES") or settings.llm_usage_sources
+    source_list = (
+        env["PULSEBOARD_LLM_USAGE_SOURCES"]
+        if "PULSEBOARD_LLM_USAGE_SOURCES" in env
+        else settings.llm_usage_sources
+    )
     for source_id in [item.strip() for item in source_list.split(",") if item.strip()]:
         prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
         source_type = env.get(prefix + "TYPE", "").strip()
@@ -72,6 +91,15 @@ def load_llm_usage_configs(settings: Settings, env_path: Path | None = None) -> 
                 api_key=(env.get(prefix + "API_KEY") or "").strip() or None,
                 access_token=(env.get(prefix + "ACCESS_TOKEN") or "").strip() or None,
                 user_id=(env.get(prefix + "USER_ID") or "1").strip() or "1",
+                request_mode=(
+                    env.get(prefix + "REQUEST_MODE")
+                    or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+                ).strip(),
+                test_model=(
+                    env.get(prefix + "TEST_MODEL")
+                    or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+                ).strip()
+                or None,
             )
         )
     return configs
@@ -87,6 +115,8 @@ def list_llm_usage_config(settings: Settings, env_path: Path | None = None) -> l
             "source_type": config.source_type,
             "base_url": config.base_url,
             "user_id": config.user_id,
+            "request_mode": config.request_mode,
+            "test_model": config.test_model,
             "has_api_key": bool(config.api_key),
             "has_access_token": bool(config.access_token),
         }
@@ -94,6 +124,7 @@ def list_llm_usage_config(settings: Settings, env_path: Path | None = None) -> l
     ]
 
 
+@_serialized_env_update
 def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) -> dict[str, Any]:
     env_path = env_path or ROOT_DIR / ".env"
     source_id = str(values.get("source_id") or "").strip()
@@ -106,9 +137,38 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", provider_id):
         raise ValueError("provider_id must use lowercase letters, numbers, '-' or '_'")
     provider_name = str(values.get("provider_name") or values.get("display_name") or provider_id).strip()
+    base_url = str(values.get("base_url") or "").strip()
+    user_id = str(values.get("user_id") or "1").strip() or "1"
+    request_mode = str(
+        values.get("request_mode")
+        or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+    ).strip()
+    test_model = str(
+        values.get("test_model")
+        or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+    ).strip()
 
     env = _merged_env(env_path)
     sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    shared = _provider_shared_values(env, sources, provider_id)
+    if shared:
+        source_type = shared["source_type"]
+        provider_name = shared["provider_name"]
+        base_url = shared["base_url"] if shared["has_base_url"] else base_url
+        user_id = shared["user_id"] if shared["has_user_id"] else user_id
+        request_mode = shared["request_mode"] if shared["has_request_mode"] else str(
+            values.get("request_mode")
+            or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+        ).strip()
+        test_model = shared["test_model"] if shared["has_test_model"] else str(
+            values.get("test_model")
+            or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+        ).strip()
+    elif source_type == "deepseek_balance":
+        base_url = ""
+        user_id = "1"
+    if request_mode not in {"responses", "chat_completions"}:
+        raise ValueError("request_mode must be responses or chat_completions")
     for existing_source_id in sources:
         if existing_source_id != source_id and _env_key(existing_source_id) == _env_key(source_id):
             raise ValueError(f"source_id {source_id} conflicts with existing source_id {existing_source_id}")
@@ -121,20 +181,38 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
         prefix + "PROVIDER_ID": provider_id,
         prefix + "PROVIDER_NAME": provider_name,
         prefix + "DISPLAY_NAME": str(values.get("display_name") or source_id).strip(),
+        prefix + "BASE_URL": base_url,
+        prefix + "USER_ID": user_id,
+        prefix + "REQUEST_MODE": request_mode,
+        prefix + "TEST_MODEL": test_model,
     }
-    if values.get("base_url") is not None:
-        updates[prefix + "BASE_URL"] = str(values.get("base_url") or "").strip()
     if values.get("api_key"):
         updates[prefix + "API_KEY"] = str(values["api_key"]).strip()
     if values.get("access_token"):
         updates[prefix + "ACCESS_TOKEN"] = str(values["access_token"]).strip()
-    if values.get("user_id") is not None:
-        updates[prefix + "USER_ID"] = str(values.get("user_id") or "1").strip()
+
+    if shared:
+        for existing_source_id in sources:
+            existing_prefix = f"PULSEBOARD_LLM_{_env_key(existing_source_id)}_"
+            if (env.get(existing_prefix + "PROVIDER_ID") or existing_source_id).strip() != provider_id:
+                continue
+            updates.update(
+                {
+                    existing_prefix + "PROVIDER_ID": provider_id,
+                    existing_prefix + "PROVIDER_NAME": provider_name,
+                    existing_prefix + "TYPE": source_type,
+                    existing_prefix + "BASE_URL": base_url,
+                    existing_prefix + "USER_ID": user_id,
+                    existing_prefix + "REQUEST_MODE": request_mode,
+                    existing_prefix + "TEST_MODEL": test_model,
+                }
+            )
 
     _write_env(env_path, updates)
     return {"source_id": source_id, "provider_id": provider_id}
 
 
+@_serialized_env_update
 def delete_llm_usage_config(source_id: str, env_path: Path | None = None) -> dict[str, Any]:
     env_path = env_path or ROOT_DIR / ".env"
     source_id = _validated_id(source_id, "source_id")
@@ -150,6 +228,7 @@ def delete_llm_usage_config(source_id: str, env_path: Path | None = None) -> dic
     return {"deleted": [source_id]}
 
 
+@_serialized_env_update
 def delete_llm_provider_config(provider_id: str, env_path: Path | None = None) -> dict[str, Any]:
     env_path = env_path or ROOT_DIR / ".env"
     provider_id = _validated_id(provider_id, "provider_id")
@@ -167,18 +246,36 @@ def delete_llm_provider_config(provider_id: str, env_path: Path | None = None) -
     return {"deleted": source_ids}
 
 
+@_serialized_env_update
 def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_path: Path | None = None) -> dict[str, Any]:
     env_path = env_path or ROOT_DIR / ".env"
     provider_id = _validated_id(provider_id, "provider_id")
+    source_ids = _source_ids_for_provider(provider_id, env_path)
+    if not source_ids:
+        raise ValueError(f"provider_id {provider_id} does not exist")
+    env = _merged_env(env_path)
+    existing = _provider_shared_values(env, source_ids, provider_id)
     source_type = str(values.get("source_type") or "").strip()
     if source_type not in {"deepseek_balance", "newapi_admin"}:
         raise ValueError("source_type must be deepseek_balance or newapi_admin")
     provider_name = str(values.get("provider_name") or provider_id).strip()
     base_url = str(values.get("base_url") or "").strip()
     user_id = str(values.get("user_id") or "1").strip() or "1"
-    source_ids = _source_ids_for_provider(provider_id, env_path)
-    if not source_ids:
-        raise ValueError(f"provider_id {provider_id} does not exist")
+    same_source_type = bool(existing and existing["source_type"] == source_type)
+    request_mode_value = values.get("request_mode")
+    request_mode = str(request_mode_value).strip() if request_mode_value is not None else (
+        existing["request_mode"]
+        if same_source_type
+        else ("chat_completions" if source_type == "deepseek_balance" else "responses")
+    )
+    if request_mode not in {"responses", "chat_completions"}:
+        raise ValueError("request_mode must be responses or chat_completions")
+    test_model_value = values.get("test_model")
+    test_model = str(test_model_value).strip() if test_model_value is not None else (
+        existing["test_model"]
+        if same_source_type
+        else ("deepseek-chat" if source_type == "deepseek_balance" else "")
+    )
 
     updates: dict[str, str] = {}
     deletes: set[str] = set()
@@ -189,6 +286,8 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
                 prefix + "PROVIDER_ID": provider_id,
                 prefix + "PROVIDER_NAME": provider_name,
                 prefix + "TYPE": source_type,
+                prefix + "REQUEST_MODE": request_mode,
+                prefix + "TEST_MODEL": test_model,
             }
         )
         if source_type == "newapi_admin":
@@ -316,38 +415,43 @@ def error_result(config: LlmUsageConfig, message: str) -> LlmUsageResult:
 
 
 def _merged_env(env_path: Path) -> dict[str, str]:
-    result = dict(os.environ)
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            result[key.strip()] = value.strip().strip('"')
-    return result
+    with _ENV_UPDATE_LOCK:
+        result = dict(os.environ)
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                result[key.strip()] = value.strip().strip('"')
+        return result
 
 
 def _write_env(env_path: Path, updates: dict[str, str], deletes: set[str] | None = None) -> None:
-    deletes = deletes or set()
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    seen = set()
-    next_lines = []
-    for line in lines:
-        if "=" not in line or line.strip().startswith("#"):
-            next_lines.append(line)
-            continue
-        key = line.split("=", 1)[0].strip()
-        if key in deletes:
-            continue
-        if key in updates:
-            next_lines.append(f"{key}={updates[key]}")
-            seen.add(key)
-        else:
-            next_lines.append(line)
-    for key, value in updates.items():
-        if key not in seen:
-            next_lines.append(f"{key}={value}")
-    env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+    with _ENV_UPDATE_LOCK:
+        for value in updates.values():
+            if any(character in str(value) for character in ("\r", "\n", "\0")):
+                raise ValueError("environment values must not contain line breaks or NUL bytes")
+        deletes = deletes or set()
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        seen = set()
+        next_lines = []
+        for line in lines:
+            if "=" not in line or line.strip().startswith("#"):
+                next_lines.append(line)
+                continue
+            key = line.split("=", 1)[0].strip()
+            if key in deletes:
+                continue
+            if key in updates:
+                next_lines.append(f"{key}={updates[key]}")
+                seen.add(key)
+            else:
+                next_lines.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                next_lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
 
 
 def _validated_id(value: str, label: str) -> str:
@@ -366,6 +470,36 @@ def _source_ids_for_provider(provider_id: str, env_path: Path) -> list[str]:
         if (env.get(prefix + "PROVIDER_ID") or source_id).strip() == provider_id:
             result.append(source_id)
     return result
+
+
+def _provider_shared_values(env: dict[str, str], source_ids: list[str], provider_id: str) -> dict[str, Any] | None:
+    for source_id in source_ids:
+        prefix = f"PULSEBOARD_LLM_{_env_key(source_id)}_"
+        if (env.get(prefix + "PROVIDER_ID") or source_id).strip() != provider_id:
+            continue
+        source_type = (env.get(prefix + "TYPE") or "").strip()
+        if not source_type:
+            continue
+        return {
+            "source_type": source_type,
+            "provider_name": (env.get(prefix + "PROVIDER_NAME") or provider_id).strip(),
+            "base_url": (env.get(prefix + "BASE_URL") or "").strip(),
+            "has_base_url": bool((env.get(prefix + "BASE_URL") or "").strip()),
+            "user_id": (env.get(prefix + "USER_ID") or "1").strip() or "1",
+            "has_user_id": prefix + "USER_ID" in env,
+            "request_mode": (
+                env.get(prefix + "REQUEST_MODE")
+                or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+            ).strip(),
+            "has_request_mode": prefix + "REQUEST_MODE" in env,
+            "test_model": (
+                env.get(prefix + "TEST_MODEL")
+                if prefix + "TEST_MODEL" in env
+                else ("deepseek-chat" if source_type == "deepseek_balance" else "")
+            ).strip(),
+            "has_test_model": prefix + "TEST_MODEL" in env,
+        }
+    return None
 
 
 def _env_key(value: str) -> str:

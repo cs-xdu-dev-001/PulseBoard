@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { deleteLlmConfig, deleteLlmProvider, fetchLlmConfig, saveLlmConfig, updateLlmProvider } from '../api.js'
+import { deleteLlmConfig, deleteLlmProvider, fetchLlmConfig, saveLlmConfig, testLlmConfig, updateLlmProvider } from '../api.js'
 
 const emptyForm = {
   mode: 'create-provider',
@@ -14,6 +14,8 @@ const emptyForm = {
   api_key: '',
   access_token: '',
   user_id: '1',
+  request_mode: 'chat_completions',
+  test_model: 'deepseek-chat',
 }
 
 export function LlmProviderSettings() {
@@ -22,6 +24,10 @@ export function LlmProviderSettings() {
   const [expandedProviders, setExpandedProviders] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [testingSources, setTestingSources] = useState(() => new Map())
+  const [testResults, setTestResults] = useState(() => new Map())
+  const testRequestIds = useRef(new Map())
+  const nextTestRequestId = useRef(0)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const groups = useMemo(() => groupConfigs(configs), [configs])
@@ -31,6 +37,7 @@ export function LlmProviderSettings() {
     try {
       const payload = await fetchLlmConfig()
       setConfigs(payload.sources || [])
+      invalidateTestResults()
       setError('')
       return true
     } catch (err) {
@@ -61,6 +68,8 @@ export function LlmProviderSettings() {
       source_type: template.source_type || 'deepseek_balance',
       base_url: template.base_url || '',
       user_id: template.user_id || '1',
+      request_mode: template.request_mode || defaultRequestMode(template.source_type),
+      test_model: template.test_model || defaultTestModel(template.source_type),
     })
     setStatus('')
     setError('')
@@ -78,6 +87,8 @@ export function LlmProviderSettings() {
       source_type: template.source_type || 'deepseek_balance',
       base_url: template.base_url || '',
       user_id: template.user_id || '1',
+      request_mode: template.request_mode || defaultRequestMode(template.source_type),
+      test_model: template.test_model || defaultTestModel(template.source_type),
     })
     setStatus('')
     setError('')
@@ -96,18 +107,27 @@ export function LlmProviderSettings() {
       source_type: item.source_type,
       base_url: item.base_url || '',
       user_id: item.user_id || '1',
+      request_mode: item.request_mode || defaultRequestMode(item.source_type),
+      test_model: item.test_model || defaultTestModel(item.source_type),
     })
     setStatus('')
     setError('')
   }
 
   async function refreshAfterMutation(message) {
+    invalidateTestResults()
     const refreshed = await load()
     if (!refreshed) return false
     setEditor(null)
     setStatus(message)
     setError('')
     return true
+  }
+
+  function invalidateTestResults() {
+    testRequestIds.current.clear()
+    setTestingSources(new Map())
+    setTestResults(new Map())
   }
 
   async function handleSave(event) {
@@ -185,6 +205,51 @@ export function LlmProviderSettings() {
     }
   }
 
+  async function handleTestKey(item) {
+    const requestId = nextTestRequestId.current + 1
+    nextTestRequestId.current = requestId
+    testRequestIds.current.set(item.source_id, requestId)
+    setTestingSources((current) => new Map(current).set(item.source_id, true))
+    setTestResults((current) => {
+      const next = new Map(current)
+      next.delete(item.source_id)
+      return next
+    })
+    try {
+      const result = await testLlmConfig(item.source_id)
+      if (testRequestIds.current.get(item.source_id) === requestId) {
+        setTestResults((current) => new Map(current).set(item.source_id, result))
+      }
+    } catch (err) {
+      if (testRequestIds.current.get(item.source_id) === requestId) {
+        setTestResults((current) => new Map(current).set(item.source_id, {
+          status: 'error',
+          error: err.message,
+          statistics: { status: 'error', error: err.message },
+          model: { status: 'error', error: err.message },
+        }))
+      }
+    } finally {
+      if (testRequestIds.current.get(item.source_id) === requestId) {
+        testRequestIds.current.delete(item.source_id)
+        setTestingSources((current) => {
+          const next = new Map(current)
+          next.delete(item.source_id)
+          return next
+        })
+      }
+    }
+  }
+
+  function handleSourceTypeChange(sourceType) {
+    setEditor({
+      ...editor,
+      source_type: sourceType,
+      request_mode: defaultRequestMode(sourceType),
+      test_model: defaultTestModel(sourceType),
+    })
+  }
+
   const sourceIdPreview = editor && editor.mode !== 'edit-provider'
     ? editor.original_source_id || `${normalizeIdPart(editor.provider_id) || 'provider'}-${normalizeIdPart(editor.key_id) || 'key'}`
     : ''
@@ -219,6 +284,7 @@ export function LlmProviderSettings() {
               <code>{editor.provider_id}</code>
               <span>{sourceTypeText(editor.source_type)}</span>
               <span>{providerEndpointText(editor)}</span>
+              <span>{requestConfigText(editor)}</span>
             </div>
           )}
 
@@ -246,7 +312,7 @@ export function LlmProviderSettings() {
                   </label>
                   <label>
                     <span>接入类型</span>
-                    <select value={editor.source_type} onChange={(event) => setEditor({ ...editor, source_type: event.target.value })}>
+                    <select value={editor.source_type} onChange={(event) => handleSourceTypeChange(event.target.value)}>
                       <option value="deepseek_balance">DeepSeek官方余额</option>
                       <option value="newapi_admin">New API管理统计</option>
                     </select>
@@ -263,6 +329,17 @@ export function LlmProviderSettings() {
                       </label>
                     </>
                   )}
+                  <label>
+                    <span>模型请求方式</span>
+                    <select value={editor.request_mode} onChange={(event) => setEditor({ ...editor, request_mode: event.target.value })}>
+                      <option value="responses">Responses API</option>
+                      <option value="chat_completions">Chat Completions</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>测试模型</span>
+                    <input value={editor.test_model} onChange={(event) => setEditor({ ...editor, test_model: event.target.value })} placeholder={defaultTestModel(editor.source_type) || 'gpt-5.4'} />
+                  </label>
                 </div>
               </fieldset>
             )}
@@ -299,15 +376,26 @@ export function LlmProviderSettings() {
                       />
                     </label>
                   ) : (
-                    <label className="llm-secret-field">
-                      <span>访问令牌</span>
-                      <input
-                        type="password"
-                        value={editor.access_token}
-                        onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
-                        placeholder={isExistingKey ? '留空则保留原密钥' : 'New API access token'}
-                      />
-                    </label>
+                    <>
+                      <label className="llm-secret-field">
+                        <span>统计访问令牌</span>
+                        <input
+                          type="password"
+                          value={editor.access_token}
+                          onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
+                          placeholder={isExistingKey ? '留空则保留原令牌' : 'New API access token'}
+                        />
+                      </label>
+                      <label className="llm-secret-field">
+                        <span>模型API Key</span>
+                        <input
+                          type="password"
+                          value={editor.api_key}
+                          onChange={(event) => setEditor({ ...editor, api_key: event.target.value })}
+                          placeholder={isExistingKey ? '留空则保留原Key' : 'sk-...'}
+                        />
+                      </label>
+                    </>
                   )}
                 </div>
               </fieldset>
@@ -324,7 +412,7 @@ export function LlmProviderSettings() {
       <div className="provider-settings-list">
         {groups.map((group) => {
           const expanded = Boolean(expandedProviders[group.provider_id])
-          const unconfiguredCount = group.items.filter((item) => !isSecretConfigured(item)).length
+          const unconfiguredCount = group.items.filter((item) => !credentialState(item).complete).length
           const providerMeta = providerMetadata(group)
           return (
             <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
@@ -335,9 +423,10 @@ export function LlmProviderSettings() {
                   <div className="provider-settings-summary">
                     <span className="provider-source-type">{sourceTypeText(providerMeta.source_type)}</span>
                     <span className="provider-endpoint">{providerEndpointText(providerMeta)}</span>
+                    <span className="provider-model-config">{requestConfigText(providerMeta)}</span>
                     <span className="provider-key-count">{group.items.length}个Key</span>
                     <span className={`provider-secret-summary ${unconfiguredCount ? 'warning' : 'configured'}`}>
-                      {unconfiguredCount ? `${unconfiguredCount}个未配置` : '全部已配置'}
+                      {unconfiguredCount ? `${unconfiguredCount}个Key凭据不完整` : '凭据已填写'}
                     </span>
                   </div>
                 </div>
@@ -360,24 +449,43 @@ export function LlmProviderSettings() {
                 <div className="provider-key-list">
                   <div className="provider-key-columns" aria-hidden="true">
                     <span>API Key</span>
-                    <span>密钥状态</span>
+                    <span>配置状态</span>
+                    <span>连通性</span>
                     <span>操作</span>
                   </div>
-                  {group.items.map((item) => (
-                    <div className="provider-key-row" key={item.source_id}>
-                      <div className="provider-key-name">
-                        <strong>{item.display_name}</strong>
-                        <code>{item.source_id}</code>
+                  {group.items.map((item) => {
+                    const testing = Boolean(testingSources.get(item.source_id))
+                    const testResult = testResults.get(item.source_id)
+                    const credentials = credentialState(item)
+                    return (
+                      <div className="provider-key-row" key={item.source_id}>
+                        <div className="provider-key-name">
+                          <strong>{item.display_name}</strong>
+                          <code>{item.source_id}</code>
+                        </div>
+                        <span className={credentials.complete ? 'secret-status configured' : 'secret-status'}>
+                          {credentials.label}
+                        </span>
+                        <div className="key-test-status" aria-live="polite">
+                          <ConnectionResult label="统计" result={testResult?.statistics} testing={testing} />
+                          <ConnectionResult label="模型" result={testResult?.model} testing={testing} />
+                        </div>
+                        <div className="provider-key-actions">
+                          <button
+                            className="subtle-button test-button"
+                            type="button"
+                            aria-label={`测试 ${item.display_name}`}
+                            disabled={testing}
+                            onClick={() => handleTestKey(item)}
+                          >
+                            {testing ? '测试中' : '测试'}
+                          </button>
+                          <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEditKey(item)}>编辑</button>
+                          <button className="subtle-button danger-button" type="button" aria-label={`删除Key ${item.display_name}`} onClick={() => handleDeleteKey(item)}>删除Key</button>
+                        </div>
                       </div>
-                      <span className={isSecretConfigured(item) ? 'secret-status configured' : 'secret-status'}>
-                        {isSecretConfigured(item) ? '密钥已配置' : '密钥未配置'}
-                      </span>
-                      <div className="provider-key-actions">
-                        <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEditKey(item)}>编辑</button>
-                        <button className="subtle-button danger-button" type="button" aria-label={`删除Key ${item.display_name}`} onClick={() => handleDeleteKey(item)}>删除Key</button>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </article>
@@ -398,9 +506,11 @@ function keyPayload(editor, providerId, keyId, sourceId) {
     display_name: editor.display_name.trim() || keyId,
     source_type: editor.source_type,
     base_url: editor.source_type === 'newapi_admin' ? editor.base_url.trim() : '',
-    api_key: editor.source_type === 'deepseek_balance' ? editor.api_key.trim() : '',
+    api_key: editor.api_key.trim(),
     access_token: editor.source_type === 'newapi_admin' ? editor.access_token.trim() : '',
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
+    request_mode: editor.request_mode,
+    test_model: editor.test_model.trim(),
   }
 }
 
@@ -410,6 +520,8 @@ function providerPayload(editor) {
     source_type: editor.source_type,
     base_url: editor.source_type === 'newapi_admin' ? editor.base_url.trim() : '',
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
+    request_mode: editor.request_mode,
+    test_model: editor.test_model.trim(),
   }
 }
 
@@ -452,8 +564,50 @@ function providerEndpointText(item) {
   return item.source_type === 'newapi_admin' ? item.base_url || '未配置接口' : '官方接口'
 }
 
-function isSecretConfigured(item) {
-  return item.source_type === 'newapi_admin' ? item.has_access_token : item.has_api_key
+function credentialState(item) {
+  if (item.source_type !== 'newapi_admin') {
+    return { complete: Boolean(item.has_api_key), label: item.has_api_key ? 'API Key已填写' : '缺API Key' }
+  }
+  if (item.has_access_token && item.has_api_key) return { complete: true, label: '两类凭据已填写' }
+  if (!item.has_access_token && !item.has_api_key) return { complete: false, label: '两类凭据未填写' }
+  if (!item.has_access_token) return { complete: false, label: '缺统计令牌' }
+  return { complete: false, label: '缺模型Key' }
+}
+
+function connectionStatusText(status) {
+  if (status === 'online') return '在线'
+  if (status === 'degraded') return '部分异常'
+  if (status === 'offline') return '离线'
+  if (status === 'error') return '测试失败'
+  if (status === 'not_configured') return '未配置'
+  return '未测试'
+}
+
+function ConnectionResult({ label, result, testing }) {
+  const status = testing ? 'testing' : result?.status || 'untested'
+  return (
+    <div className="connection-result">
+      <span className="connection-label">{label}</span>
+      <span className={`connection-status ${status}`}>{testing ? '测试中' : connectionStatusText(status)}</span>
+      {result?.error && <p title={result.error}>{result.error}</p>}
+    </div>
+  )
+}
+
+function defaultRequestMode(sourceType) {
+  return sourceType === 'deepseek_balance' ? 'chat_completions' : 'responses'
+}
+
+function defaultTestModel(sourceType) {
+  return sourceType === 'deepseek_balance' ? 'deepseek-chat' : ''
+}
+
+function requestModeText(requestMode) {
+  return requestMode === 'chat_completions' ? 'Chat Completions' : 'Responses'
+}
+
+function requestConfigText(item) {
+  return `${requestModeText(item.request_mode || defaultRequestMode(item.source_type))} · ${item.test_model || '未配置模型'}`
 }
 
 function editorTitle(editor) {

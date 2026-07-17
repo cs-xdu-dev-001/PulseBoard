@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Literal
+from urllib.parse import quote, quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -18,7 +20,7 @@ from app.llm_usage import (
     save_llm_usage_config,
     update_llm_provider_config,
 )
-from app.llm_usage_collector import collect_llm_usage_once
+from app.llm_usage_collector import check_model_connection, collect_llm_usage_once, collect_source
 from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
 from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSource, Machine, MachineMetric, VpsMetric, VpsNode
 from app.settings_config import load_app_settings, save_app_settings
@@ -36,6 +38,8 @@ class LlmUsageConfigPayload(BaseModel):
     api_key: str | None = None
     access_token: str | None = None
     user_id: str | None = None
+    request_mode: str | None = None
+    test_model: str | None = None
 
 
 class LlmProviderConfigPayload(BaseModel):
@@ -43,6 +47,8 @@ class LlmProviderConfigPayload(BaseModel):
     source_type: str
     base_url: str | None = None
     user_id: str | None = None
+    request_mode: str | None = None
+    test_model: str | None = None
 
 
 class SettingsPayload(BaseModel):
@@ -235,6 +241,49 @@ def save_llm_usage_source(payload: LlmUsageConfigPayload) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     get_settings.cache_clear()
     return {"ok": True, **result}
+
+
+@router.post("/llm/usage/config/{source_id}/test")
+def test_llm_usage_source(source_id: str) -> dict:
+    config = next(
+        (item for item in load_llm_usage_configs(get_settings()) if item.source_id == source_id),
+        None,
+    )
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"未找到API Key配置：{source_id}")
+
+    result = collect_source(config)
+    model_result = check_model_connection(config)
+    statistics_error = _sanitize_llm_test_error(result.error, config.api_key, config.access_token)
+    model_error = _sanitize_llm_test_error(model_result.get("error"), config.api_key, config.access_token)
+    return {
+        "source_id": result.source_id,
+        "display_name": result.display_name,
+        "status": result.status,
+        "error": statistics_error,
+        "statistics": {
+            "status": result.status,
+            "error": statistics_error,
+        },
+        "model": {
+            "status": model_result.get("status"),
+            "error": model_error,
+            "request_mode": model_result.get("request_mode"),
+            "test_model": model_result.get("test_model"),
+        },
+        "checked_at": datetime.now(timezone.utc),
+    }
+
+
+def _sanitize_llm_test_error(message: str | None, *secrets: str | None) -> str | None:
+    if not message:
+        return None
+    sanitized = str(message)
+    for secret in secrets:
+        if secret:
+            for variant in {secret, quote(secret, safe=""), quote_plus(secret, safe="")}:
+                sanitized = re.sub(re.escape(variant), "[已脱敏]", sanitized, flags=re.IGNORECASE)
+    return sanitized[:1000]
 
 
 @router.delete("/llm/usage/config/{source_id}")

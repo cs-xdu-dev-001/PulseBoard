@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -8,6 +8,7 @@ import {
   fetchSettings,
   saveLlmConfig,
   saveSettings,
+  testLlmConfig,
   updateLlmProvider,
 } from '../api.js'
 import { SettingsView } from './SettingsView.jsx'
@@ -19,6 +20,7 @@ vi.mock('../api.js', () => ({
   deleteLlmProvider: vi.fn(),
   saveLlmConfig: vi.fn(),
   saveSettings: vi.fn(),
+  testLlmConfig: vi.fn(),
   updateLlmProvider: vi.fn(),
 }))
 
@@ -31,6 +33,8 @@ const llmSources = [
     source_type: 'deepseek_balance',
     base_url: null,
     user_id: '1',
+    request_mode: 'chat_completions',
+    test_model: 'deepseek-chat',
     has_api_key: true,
     has_access_token: false,
   },
@@ -42,6 +46,8 @@ const llmSources = [
     source_type: 'deepseek_balance',
     base_url: null,
     user_id: '1',
+    request_mode: 'chat_completions',
+    test_model: 'deepseek-chat',
     has_api_key: true,
     has_access_token: false,
   },
@@ -53,6 +59,8 @@ const llmSources = [
     source_type: 'newapi_admin',
     base_url: 'https://gateway.example.com',
     user_id: '1',
+    request_mode: 'responses',
+    test_model: 'gpt-5.4',
     has_api_key: true,
     has_access_token: false,
   },
@@ -72,6 +80,15 @@ describe('Settings LLM供应商配置', () => {
     deleteLlmProvider.mockResolvedValue({ ok: true })
     saveSettings.mockResolvedValue({ ok: true })
     saveLlmConfig.mockResolvedValue({ ok: true })
+    testLlmConfig.mockResolvedValue({
+      source_id: 'deepseek-main',
+      display_name: '主Key',
+      status: 'online',
+      error: null,
+      statistics: { status: 'online', error: null },
+      model: { status: 'online', error: null, request_mode: 'chat_completions', test_model: 'deepseek-chat' },
+      checked_at: '2026-07-17T04:00:00Z',
+    })
     updateLlmProvider.mockResolvedValue({ ok: true })
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
@@ -116,11 +133,14 @@ describe('Settings LLM供应商配置', () => {
     fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
     fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'backup' } })
     fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: '备用账号' } })
-    fireEvent.change(screen.getByLabelText('访问令牌'), { target: { value: 'token-value' } })
+    fireEvent.change(screen.getByLabelText('统计访问令牌'), { target: { value: 'token-value' } })
+    fireEvent.change(screen.getByLabelText('模型API Key'), { target: { value: 'model-key-value' } })
 
     expect(screen.queryByLabelText('接入类型')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('User ID')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('模型请求方式')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('测试模型')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
 
@@ -132,6 +152,9 @@ describe('Settings LLM供应商配置', () => {
         display_name: '备用账号',
         source_type: 'newapi_admin',
         base_url: 'https://gateway.example.com',
+        request_mode: 'responses',
+        test_model: 'gpt-5.4',
+        api_key: 'model-key-value',
         access_token: 'token-value',
         user_id: '1',
       }))
@@ -157,12 +180,129 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '留空则保留原密钥')
   })
 
-  it('New API只按访问令牌判断密钥状态', async () => {
+  it('New API分别显示统计令牌和模型Key的配置状态', async () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-academic')
     fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
-    expect(within(provider).getByText('密钥未配置')).toBeVisible()
+    expect(within(provider).getByText('缺统计令牌')).toBeVisible()
+  })
+
+  it('可以测试单个Key并在对应行显示在线状态', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '测试 主Key' }))
+
+    await waitFor(() => {
+      expect(testLlmConfig).toHaveBeenCalledWith('deepseek-main')
+      expect(within(provider).getAllByText('在线')).toHaveLength(2)
+    })
+  })
+
+  it('Key测试离线时显示上游返回的错误', async () => {
+    testLlmConfig.mockResolvedValueOnce({
+      source_id: 'deepseek-main',
+      display_name: '主Key',
+      status: 'offline',
+      error: 'Unauthorized, invalid access token',
+      statistics: { status: 'offline', error: 'Unauthorized, invalid access token' },
+      model: { status: 'online', error: null, request_mode: 'chat_completions', test_model: 'deepseek-chat' },
+      checked_at: '2026-07-17T04:00:00Z',
+    })
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '测试 主Key' }))
+    const keyRow = within(provider).getByText('主Key').closest('.provider-key-row')
+
+    expect(await within(keyRow).findByText('离线')).toBeVisible()
+    expect(within(keyRow).getByText('统计')).toBeVisible()
+    expect(within(keyRow).getByText('模型')).toBeVisible()
+    expect(within(keyRow).getByText('在线')).toBeVisible()
+    expect(within(keyRow).getByText('Unauthorized, invalid access token')).toBeVisible()
+  })
+
+  it('编辑Key后清除旧的连通性结果', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '测试 主Key' }))
+    const keyRow = within(provider).getByText('主Key').closest('.provider-key-row')
+    expect(await within(keyRow).findAllByText('在线')).toHaveLength(2)
+
+    fireEvent.click(within(keyRow).getByRole('button', { name: '编辑 主Key' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    await waitFor(() => {
+      const refreshedRow = within(provider).getByText('主Key').closest('.provider-key-row')
+      expect(within(refreshedRow).getAllByText('未测试')).toHaveLength(2)
+    })
+  })
+
+  it('配置变更后忽略仍在进行的旧测试结果', async () => {
+    let resolveTest
+    testLlmConfig.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveTest = resolve
+    }))
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '测试 主Key' }))
+    const keyRow = within(provider).getByText('主Key').closest('.provider-key-row')
+    expect(keyRow.querySelector('.connection-status')).toHaveTextContent('测试中')
+
+    fireEvent.click(within(keyRow).getByRole('button', { name: '编辑 主Key' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+    expect(await screen.findByText('已保存主Key')).toBeVisible()
+
+    await act(async () => {
+      resolveTest({
+        source_id: 'deepseek-main',
+        display_name: '主Key',
+        status: 'online',
+        error: null,
+        statistics: { status: 'online', error: null },
+        model: { status: 'online', error: null, request_mode: 'chat_completions', test_model: 'deepseek-chat' },
+        checked_at: '2026-07-17T04:00:00Z',
+      })
+    })
+
+    const refreshedRow = within(provider).getByText('主Key').closest('.provider-key-row')
+    expect(within(refreshedRow).getAllByText('未测试')).toHaveLength(2)
+    expect(within(refreshedRow).queryByText('在线')).not.toBeInTheDocument()
+  })
+
+  it('source_id与对象原型属性同名时仍可测试', async () => {
+    fetchLlmConfig.mockResolvedValueOnce({
+      sources: [
+        ...llmSources,
+        {
+          source_id: 'constructor',
+          provider_id: 'prototype-provider',
+          provider_name: 'Prototype Provider',
+          display_name: 'Constructor Key',
+          source_type: 'deepseek_balance',
+          base_url: null,
+          user_id: '1',
+          request_mode: 'chat_completions',
+          test_model: 'deepseek-chat',
+          has_api_key: true,
+          has_access_token: false,
+        },
+      ],
+    })
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-prototype-provider')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开Prototype Provider的Key' }))
+
+    expect(within(provider).getByRole('button', { name: '测试 Constructor Key' })).toBeEnabled()
+    expect(within(provider).getAllByText('未测试')).toHaveLength(2)
   })
 
   it('编辑供应商公共配置时不出现密钥字段', async () => {
@@ -177,11 +317,15 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('接入类型')).toHaveValue('newapi_admin')
     expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.com')
     expect(screen.getByLabelText('User ID')).toHaveValue('1')
-    expect(screen.queryByLabelText('访问令牌')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('模型请求方式')).toHaveValue('responses')
+    expect(screen.getByLabelText('测试模型')).toHaveValue('gpt-5.4')
+    expect(screen.queryByLabelText('统计访问令牌')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('模型API Key')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'Academic' } })
     fireEvent.change(screen.getByLabelText('User ID'), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText('测试模型'), { target: { value: 'gpt-5.4-mini' } })
     fireEvent.click(screen.getByRole('button', { name: '保存供应商' }))
 
     await waitFor(() => {
@@ -189,6 +333,8 @@ describe('Settings LLM供应商配置', () => {
         provider_name: 'Academic',
         source_type: 'newapi_admin',
         base_url: 'https://gateway.example.com',
+        request_mode: 'responses',
+        test_model: 'gpt-5.4-mini',
         user_id: '2',
       })
     })
@@ -226,8 +372,9 @@ describe('Settings LLM供应商配置', () => {
     const deepseek = screen.getByTestId('llm-provider-deepseek')
     expect(within(academic).getByText('New API')).toBeVisible()
     expect(within(academic).getByText('https://gateway.example.com')).toBeVisible()
-    expect(within(academic).getByText('1个未配置')).toBeVisible()
-    expect(within(deepseek).getByText('全部已配置')).toBeVisible()
+    expect(within(academic).getByText('1个Key凭据不完整')).toBeVisible()
+    expect(within(academic).getByText('Responses · gpt-5.4')).toBeVisible()
+    expect(within(deepseek).getByText('凭据已填写')).toBeVisible()
   })
 
   it('保存后重新加载失败时保留编辑器并显示错误', async () => {
@@ -243,6 +390,26 @@ describe('Settings LLM供应商配置', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('重新加载失败')
     expect(screen.getByRole('heading', { name: '为DeepSeek添加Key' })).toBeVisible()
     expect(screen.queryByText(/已保存Key 3/)).not.toBeInTheDocument()
+  })
+
+  it('保存成功但重新加载失败时也清除旧测试结果', async () => {
+    fetchLlmConfig
+      .mockResolvedValueOnce({ sources: llmSources })
+      .mockRejectedValueOnce(new Error('重新加载失败'))
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开DeepSeek的Key' }))
+    fireEvent.click(within(provider).getByRole('button', { name: '测试 主Key' }))
+    const keyRow = within(provider).getByText('主Key').closest('.provider-key-row')
+    expect(await within(keyRow).findAllByText('在线')).toHaveLength(2)
+
+    fireEvent.click(within(keyRow).getByRole('button', { name: '编辑 主Key' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('重新加载失败')
+    expect(within(keyRow).getAllByText('未测试')).toHaveLength(2)
+    expect(within(keyRow).queryByText('在线')).not.toBeInTheDocument()
   })
 
   it('保存运行参数时不会回写隐藏的LLM来源列表', async () => {

@@ -1,5 +1,9 @@
+from threading import Barrier, BrokenBarrierError, Thread
+
+import httpx
 import pytest
 
+from app import llm_usage
 from app.config import Settings
 from app.llm_usage import (
     LlmUsageConfig,
@@ -12,7 +16,7 @@ from app.llm_usage import (
     save_llm_usage_config,
     update_llm_provider_config,
 )
-from app.llm_usage_collector import collect_newapi
+from app.llm_usage_collector import check_model_connection, collect_newapi
 from app.llm_pricing import estimate_model_cost_usd
 
 
@@ -24,6 +28,9 @@ def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path):
                 "PULSEBOARD_LLM_ACADEMIC_TYPE=newapi_admin",
                 "PULSEBOARD_LLM_ACADEMIC_DISPLAY_NAME=Academic Gateway",
                 "PULSEBOARD_LLM_ACADEMIC_BASE_URL=https://new-api.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_REQUEST_MODE=responses",
+                "PULSEBOARD_LLM_ACADEMIC_TEST_MODEL=gpt-5.4",
+                "PULSEBOARD_LLM_ACADEMIC_API_KEY=model-secret",
                 "PULSEBOARD_LLM_ACADEMIC_ACCESS_TOKEN=secret",
             ]
         )
@@ -37,6 +44,9 @@ def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path):
     assert configs[0].source_id == "academic"
     assert configs[0].display_name == "Academic Gateway"
     assert configs[0].base_url == "https://new-api.example.com"
+    assert configs[0].request_mode == "responses"
+    assert configs[0].test_model == "gpt-5.4"
+    assert configs[0].api_key == "model-secret"
     assert configs[0].access_token == "secret"
 
 
@@ -207,6 +217,131 @@ def test_collect_newapi_reports_success_false_payloads(monkeypatch):
     assert result.error == "Unauthorized, invalid access token"
 
 
+def test_check_model_connection_uses_responses_endpoint(monkeypatch):
+    request = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, headers, json, timeout):
+        request.update(url=url, headers=headers, json=json, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.post", fake_post)
+
+    result = check_model_connection(
+        LlmUsageConfig(
+            "academic-main",
+            "Academic",
+            "newapi_admin",
+            base_url="https://gateway.example.com/v1",
+            api_key="model-secret",
+            request_mode="responses",
+            test_model="gpt-5.4",
+        )
+    )
+
+    assert request == {
+        "url": "https://gateway.example.com/v1/responses",
+        "headers": {"Authorization": "Bearer model-secret", "Content-Type": "application/json"},
+        "json": {"model": "gpt-5.4", "input": "Reply with OK only."},
+        "timeout": 30,
+    }
+    assert result == {
+        "status": "online",
+        "error": None,
+        "request_mode": "responses",
+        "test_model": "gpt-5.4",
+    }
+
+
+def test_check_model_connection_uses_chat_completions_endpoint(monkeypatch):
+    request = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, headers, json, timeout):
+        request.update(url=url, headers=headers, json=json, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.post", fake_post)
+
+    result = check_model_connection(
+        LlmUsageConfig(
+            "deepseek-main",
+            "DeepSeek",
+            "deepseek_balance",
+            api_key="model-secret",
+            request_mode="chat_completions",
+            test_model="deepseek-chat",
+        )
+    )
+
+    assert request["url"] == "https://api.deepseek.com/v1/chat/completions"
+    assert request["json"] == {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": "Reply with OK only."}],
+    }
+    assert result["status"] == "online"
+
+
+def test_check_model_connection_includes_upstream_error_message(monkeypatch):
+    request = httpx.Request("POST", "https://gateway.example.com/v1/responses")
+    response = httpx.Response(
+        400,
+        request=request,
+        json={"error": {"message": "The requested model does not exist"}},
+    )
+    monkeypatch.setattr("app.llm_usage_collector.httpx.post", lambda *_args, **_kwargs: response)
+
+    result = check_model_connection(
+        LlmUsageConfig(
+            "academic-main",
+            "Academic",
+            "newapi_admin",
+            base_url="https://gateway.example.com",
+            api_key="model-secret",
+            request_mode="responses",
+            test_model="missing-model",
+        )
+    )
+
+    assert result["status"] == "offline"
+    assert result["error"] == "HTTP 400: The requested model does not exist"
+
+
+@pytest.mark.parametrize(
+    ("api_key", "test_model", "error"),
+    [
+        (None, "gpt-5.4", "模型API Key未配置"),
+        ("model-secret", None, "测试模型未配置"),
+    ],
+)
+def test_check_model_connection_reports_missing_config_without_request(monkeypatch, api_key, test_model, error):
+    def fail_post(*_args, **_kwargs):
+        raise AssertionError("不应发送模型请求")
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.post", fail_post)
+
+    result = check_model_connection(
+        LlmUsageConfig(
+            "academic-main",
+            "Academic",
+            "newapi_admin",
+            base_url="https://gateway.example.com",
+            api_key=api_key,
+            request_mode="responses",
+            test_model=test_model,
+        )
+    )
+
+    assert result["status"] == "not_configured"
+    assert result["error"] == error
+
+
 def test_openai_pricing_estimates_cost_from_tokens():
     result = estimate_model_cost_usd("gpt-4.1-mini", input_tokens=1_000_000, output_tokens=1_000_000)
 
@@ -261,6 +396,45 @@ def test_save_llm_usage_config_writes_provider_group_metadata(tmp_path):
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key" in text
+
+
+def test_save_newapi_config_writes_model_test_settings_and_both_secrets(tmp_path):
+    env_path = tmp_path / "test.env"
+
+    save_llm_usage_config(
+        {
+            "source_id": "academic-main",
+            "source_type": "newapi_admin",
+            "provider_id": "academic",
+            "provider_name": "Academic",
+            "display_name": "主Key",
+            "base_url": "https://gateway.example.com",
+            "request_mode": "responses",
+            "test_model": "gpt-5.4",
+            "api_key": "model-secret",
+            "access_token": "stats-secret",
+            "user_id": "1",
+        },
+        env_path=env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_REQUEST_MODE=responses" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_API_KEY=model-secret" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=stats-secret" in text
+
+
+def test_save_llm_usage_config_rejects_unknown_request_mode(tmp_path):
+    with pytest.raises(ValueError, match="request_mode"):
+        save_llm_usage_config(
+            {
+                "source_id": "academic-main",
+                "source_type": "newapi_admin",
+                "request_mode": "legacy-completions",
+            },
+            env_path=tmp_path / "test.env",
+        )
 
 
 def test_save_llm_usage_config_rejects_env_prefix_collision(tmp_path):
@@ -334,6 +508,29 @@ def test_delete_llm_usage_config_removes_source_and_secret(tmp_path):
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=main-secret" in text
 
 
+def test_delete_last_llm_config_does_not_restore_stale_process_environment(tmp_path, monkeypatch):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=file-secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PULSEBOARD_LLM_USAGE_SOURCES", "deepseek-main")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE", "deepseek_balance")
+    monkeypatch.setenv("PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY", "stale-process-secret")
+
+    delete_llm_usage_config("deepseek-main", env_path=env_path)
+
+    configs = load_llm_usage_configs(Settings(llm_usage_sources="deepseek-main"), env_path=env_path)
+    assert configs == []
+
+
 def test_delete_llm_provider_config_removes_all_provider_sources(tmp_path):
     env_path = tmp_path / "test.env"
     env_path.write_text(
@@ -390,6 +587,8 @@ def test_update_llm_provider_config_updates_shared_fields(tmp_path):
             "provider_name": "Academic",
             "source_type": "newapi_admin",
             "base_url": "https://new.example.com",
+            "request_mode": "responses",
+            "test_model": "gpt-5.4",
             "user_id": "2",
         },
         env_path=env_path,
@@ -402,7 +601,150 @@ def test_update_llm_provider_config_updates_shared_fields(tmp_path):
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://new.example.com" in text
     assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_BASE_URL=https://new.example.com" in text
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_USER_ID=2" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_REQUEST_MODE=responses" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_REQUEST_MODE=responses" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_TEST_MODEL=gpt-5.4" in text
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=main-token" in text
+
+
+def test_save_key_inherits_existing_provider_shared_fields(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic-main",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=Academic Gateway",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://gateway.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_USER_ID=7",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_REQUEST_MODE=responses",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    save_llm_usage_config(
+        {
+            "source_id": "academic-backup",
+            "provider_id": "academic",
+            "provider_name": "被忽略的名称",
+            "display_name": "备用Key",
+            "source_type": "deepseek_balance",
+            "base_url": "https://attacker.example.com",
+            "user_id": "99",
+            "request_mode": "chat_completions",
+            "test_model": "other-model",
+            "api_key": "model-secret",
+            "access_token": "stats-secret",
+        },
+        env_path=env_path,
+    )
+
+    configs = load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path)
+    added = next(config for config in configs if config.source_id == "academic-backup")
+    assert added.provider_name == "Academic Gateway"
+    assert added.source_type == "newapi_admin"
+    assert added.base_url == "https://gateway.example.com"
+    assert added.user_id == "7"
+    assert added.request_mode == "responses"
+    assert added.test_model == "gpt-5.4"
+
+
+def test_update_provider_preserves_request_settings_when_optional_fields_are_missing(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic-main",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=Academic Gateway",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://gateway.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_REQUEST_MODE=responses",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    update_llm_provider_config(
+        "academic",
+        {
+            "provider_name": "Academic",
+            "source_type": "newapi_admin",
+            "base_url": "https://gateway.example.com",
+            "user_id": "1",
+        },
+        env_path=env_path,
+    )
+
+    config = load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path)[0]
+    assert config.request_mode == "responses"
+    assert config.test_model == "gpt-5.4"
+
+
+def test_save_llm_usage_config_rejects_newlines_in_env_values(tmp_path):
+    env_path = tmp_path / "test.env"
+
+    with pytest.raises(ValueError, match="line breaks"):
+        save_llm_usage_config(
+            {
+                "source_id": "academic-main",
+                "provider_id": "academic",
+                "provider_name": "Academic",
+                "display_name": "主Key",
+                "source_type": "newapi_admin",
+                "base_url": "https://gateway.example.com",
+                "request_mode": "responses",
+                "test_model": "gpt-5.4\nPULSEBOARD_LLM_USAGE_SOURCES=stolen",
+            },
+            env_path=env_path,
+        )
+
+    assert not env_path.exists()
+
+
+def test_concurrent_llm_config_saves_do_not_lose_sources(tmp_path, monkeypatch):
+    env_path = tmp_path / "test.env"
+    env_path.write_text("PULSEBOARD_LLM_USAGE_SOURCES=\n", encoding="utf-8")
+    barrier = Barrier(2)
+    original_write_env = llm_usage._write_env
+
+    def synchronized_write(*args, **kwargs):
+        try:
+            barrier.wait(timeout=0.5)
+        except BrokenBarrierError:
+            pass
+        return original_write_env(*args, **kwargs)
+
+    monkeypatch.setattr(llm_usage, "_write_env", synchronized_write)
+
+    def save(source_id):
+        save_llm_usage_config(
+            {
+                "source_id": source_id,
+                "provider_id": source_id,
+                "provider_name": source_id,
+                "display_name": "主Key",
+                "source_type": "deepseek_balance",
+                "api_key": f"{source_id}-secret",
+            },
+            env_path=env_path,
+        )
+
+    threads = [Thread(target=save, args=(source_id,)) for source_id in ("provider-a", "provider-b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    configs = load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path)
+    assert {config.source_id for config in configs} == {"provider-a", "provider-b"}
 
 
 def test_list_llm_usage_config_masks_secret(tmp_path):
