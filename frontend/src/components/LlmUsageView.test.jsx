@@ -47,3 +47,43 @@ it('LLM看板只保留监控操作，不再提供API Key配置', async () => {
   expect(screen.queryByText('保存ID')).not.toBeInTheDocument()
   expect(screen.queryByText('API Key')).not.toBeInTheDocument()
 })
+
+it('同一供应商多个Key返回相同余额时只计一次账户余额', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'deepseek-main',
+        provider_id: 'deepseek',
+        provider_name: 'DeepSeek',
+        display_name: 'codex',
+        status: 'online',
+        balance_currency: 'CNY',
+        balance_total: 48.86,
+      },
+      {
+        source_id: 'deepseek-key-2',
+        provider_id: 'deepseek',
+        provider_name: 'DeepSeek',
+        display_name: 'promind',
+        status: 'online',
+        balance_currency: 'CNY',
+        balance_total: 48.86,
+      },
+      {
+        source_id: 'deepseek-key-3',
+        provider_id: 'deepseek',
+        provider_name: 'DeepSeek',
+        display_name: 'chatai',
+        status: 'online',
+        balance_currency: 'CNY',
+        balance_total: 48.86,
+      },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  expect(await screen.findByText('DeepSeek')).toBeVisible()
+  expect(screen.getAllByText('CNY 48.86').length).toBeGreaterThanOrEqual(2)
+  expect(screen.queryByText('CNY 146.58')).not.toBeInTheDocument()
+})
