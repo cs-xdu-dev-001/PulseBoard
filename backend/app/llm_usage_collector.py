@@ -20,10 +20,9 @@ from app.models import LlmUsageSnapshot, LlmUsageSource
 
 
 NEWAPI_ENDPOINTS = {
-    "dashboard": "/api/user/self",
-    "stat": "/api/log/stat",
-    "logs": "/api/log/?p=0&page_size=100",
-    "channels": "/api/channel/",
+    "dashboard": ("/api/user/self",),
+    "stat": ("/api/log/self/stat", "/api/log/stat"),
+    "logs": ("/api/log/self?p=1&page_size=100&type=2", "/api/log/?p=1&page_size=100&type=2"),
 }
 
 
@@ -68,14 +67,24 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     }
     payloads = {}
     with httpx.Client(timeout=20) as client:
-        for name, path in NEWAPI_ENDPOINTS.items():
-            try:
-                response = client.get(newapi_url(config.base_url, path), headers=headers)
-                response.raise_for_status()
-                payloads[name] = response.json()
-            except Exception as exc:
-                payloads[name] = {"_error": str(exc)}
+        for name, paths in NEWAPI_ENDPOINTS.items():
+            payloads[name] = _collect_newapi_payload(client, config.base_url, paths, headers)
     return normalize_newapi(config, payloads)
+
+
+def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[str, ...], headers: dict[str, str]) -> dict:
+    last_error = None
+    for path in paths:
+        try:
+            response = client.get(newapi_url(base_url, path), headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("success") is False:
+                raise RuntimeError(str(payload.get("message") or "New API request failed"))
+            return payload
+        except Exception as exc:
+            last_error = str(exc)
+    return {"_error": last_error or "New API request failed"}
 
 
 def get_or_create_source(db: Session, result: LlmUsageResult) -> LlmUsageSource:

@@ -236,39 +236,56 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
     logs = _unwrap(payloads.get("logs"))
     channels = _unwrap(payloads.get("channels"))
 
-    request_count = _first_number(stat, ["count", "request_count", "total_count"]) or _first_number(
-        dashboard, ["count", "request_count", "total_count"]
+    request_count = _coalesce_number(
+        _first_number(stat, ["count", "request_count", "total_count"]),
+        _first_number(dashboard, ["count", "request_count", "total_count"]),
     )
-    token_count = _first_number(stat, ["token", "tokens", "token_count", "total_tokens"]) or _first_number(
-        dashboard, ["token", "tokens", "token_count", "total_tokens"]
+    token_count = _coalesce_number(
+        _first_number(stat, ["token", "tokens", "token_count", "total_tokens"]),
+        _first_number(dashboard, ["token", "tokens", "token_count", "total_tokens"]),
     )
-    quota_used = _first_number(stat, ["quota", "used_quota", "quota_used", "amount"]) or _first_number(
-        dashboard, ["quota", "used_quota", "quota_used", "amount"]
+    quota_used = _coalesce_number(
+        _first_number(stat, ["quota", "used_quota", "quota_used", "amount"]),
+        _first_number(dashboard, ["used_quota", "quota_used", "amount"]),
     )
     rpm = _first_number(stat, ["rpm", "request_rpm"])
     tpm = _first_number(stat, ["tpm", "token_tpm"])
     success_rate = _first_number(stat, ["success_rate"])
     avg_latency = _first_number(stat, ["avg_latency", "avg_latency_seconds", "latency"])
     model_stats = _model_stats_from(logs) or _model_stats_from(stat) or _model_stats_from(dashboard)
-    quota_total = _first_number(dashboard, ["quota"])
+    request_count = _coalesce_number(request_count, _sum_model_stats(model_stats, "request_count"))
+    token_count = _coalesce_number(token_count, _sum_model_stats(model_stats, "token_count"))
+    quota_used = _coalesce_number(quota_used, _sum_model_stats(model_stats, "amount"))
+    quota_remaining = _first_number(dashboard, ["quota", "remaining_quota"])
     dashboard_quota_used = _first_number(dashboard, ["used_quota"])
+    quota_total = _first_number(dashboard, ["total_quota", "quota_total"])
     balance_total = _channel_balance_total(channels)
-    if dashboard_quota_used is not None:
-        quota_used = dashboard_quota_used
+    if quota_total is None and quota_remaining is not None and dashboard_quota_used is not None:
+        quota_total = quota_remaining + dashboard_quota_used
     if quota_total is None:
         quota_total = balance_total
+    if quota_remaining is None and quota_total is not None and quota_used is not None:
+        quota_remaining = quota_total - quota_used
 
     estimated_cost = estimate_snapshot_cost_usd(model_stats=model_stats, token_count=token_count, raw_quota=quota_used)
-    degraded = any(isinstance(value, dict) and value.get("_error") for value in payloads.values())
+    errors = [
+        str(value.get("_error"))
+        for value in payloads.values()
+        if isinstance(value, dict) and value.get("_error")
+    ]
+    core_names = [name for name in ("dashboard", "stat", "logs") if name in payloads]
+    all_core_failed = bool(core_names) and all(
+        isinstance(payloads.get(name), dict) and payloads.get(name, {}).get("_error") for name in core_names
+    )
     return LlmUsageResult(
         source_id=config.source_id,
         display_name=config.display_name,
         source_type=config.source_type,
-        status="degraded" if degraded else "online",
+        status="offline" if all_core_failed else "degraded" if errors else "online",
         balance_total=balance_total,
         quota_total=quota_total,
         quota_used=quota_used,
-        quota_remaining=quota_total - quota_used if quota_total is not None and quota_used is not None else None,
+        quota_remaining=quota_remaining,
         request_count=request_count,
         token_count=token_count,
         estimated_amount=estimated_cost,
@@ -283,6 +300,7 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
             "logs": _safe_summary(logs),
             "channels": _safe_summary(channels),
         },
+        error=errors[0] if errors else None,
     )
 
 
@@ -389,6 +407,33 @@ def _first_number(value: Any, keys: list[str]) -> float | None:
     return None
 
 
+def _coalesce_number(*values: float | None) -> float | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _number_from_keys(value: dict[str, Any], keys: list[str]) -> float | None:
+    for key in keys:
+        number = _to_float(value.get(key))
+        if number is not None:
+            return number
+    return None
+
+
+def _sum_model_stats(model_stats: list[dict[str, Any]], field: str) -> float | None:
+    total = 0.0
+    seen = False
+    for item in model_stats:
+        number = _to_float(item.get(field))
+        if number is None:
+            continue
+        total += number
+        seen = True
+    return total if seen else None
+
+
 def _model_stats_from(value: Any) -> list[dict[str, Any]]:
     rows = _model_rows(value)
     if not rows:
@@ -413,14 +458,19 @@ def _model_stats_from(value: Any) -> list[dict[str, Any]]:
                 "pricing_basis": "unknown",
             },
         )
-        grouped_item["request_count"] += _to_float(item.get("count") or item.get("request_count")) or 1
-        input_tokens = _to_float(item.get("input_tokens") or item.get("prompt_tokens"))
-        output_tokens = _to_float(item.get("output_tokens") or item.get("completion_tokens"))
-        token_count = _to_float(item.get("token") or item.get("tokens") or item.get("token_count") or item.get("total_tokens"))
+        grouped_item["request_count"] += _coalesce_number(
+            _number_from_keys(item, ["count", "request_count", "total_count"]),
+            1,
+        )
+        input_tokens = _number_from_keys(item, ["input_tokens", "prompt_tokens"])
+        output_tokens = _number_from_keys(item, ["output_tokens", "completion_tokens"])
+        token_count = _number_from_keys(item, ["token", "tokens", "token_count", "total_tokens", "total_token"])
+        if token_count is None and (input_tokens is not None or output_tokens is not None):
+            token_count = (input_tokens or 0) + (output_tokens or 0)
         grouped_item["token_count"] += token_count or 0
         grouped_item["input_tokens"] += input_tokens or 0
         grouped_item["output_tokens"] += output_tokens or 0
-        grouped_item["amount"] += _to_float(item.get("amount") or item.get("quota") or item.get("used_quota")) or 0
+        grouped_item["amount"] += _number_from_keys(item, ["amount", "quota", "used_quota", "cost", "price"]) or 0
     for grouped_item in grouped.values():
         estimate = estimate_model_cost_usd(
             grouped_item["model"],
@@ -438,7 +488,7 @@ def _model_rows(value: Any) -> list[dict[str, Any]]:
         return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
         rows = []
-        for key in ("items", "logs", "data"):
+        for key in ("items", "logs", "data", "rows", "records", "list"):
             child = value.get(key)
             if isinstance(child, list):
                 rows.extend(_model_rows(child))

@@ -12,6 +12,7 @@ from app.llm_usage import (
     save_llm_usage_config,
     update_llm_provider_config,
 )
+from app.llm_usage_collector import collect_newapi
 from app.llm_pricing import estimate_model_cost_usd
 
 
@@ -77,6 +78,133 @@ def test_normalize_newapi_tolerates_partial_payloads():
     assert result.token_count == 2000
     assert result.quota_used == 1.5
     assert result.model_stats[0]["model"] == "deepseek-chat"
+
+
+def test_normalize_newapi_derives_usage_from_user_log_items():
+    result = normalize_newapi(
+        LlmUsageConfig("academic-key-3", "Blog", "newapi_admin", base_url="https://example", access_token="secret"),
+        {
+            "dashboard": {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}},
+            "stat": {"success": True, "data": {"quota": 20_668, "rpm": 1, "tpm": 1883}},
+            "logs": {
+                "success": True,
+                "data": {
+                    "page": 1,
+                    "page_size": 100,
+                    "total": 1,
+                    "items": [
+                        {
+                            "model_name": "gpt-5.6-sol",
+                            "prompt_tokens": 971,
+                            "completion_tokens": 912,
+                            "quota": 20_668,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert result.status == "online"
+    assert result.request_count == 1
+    assert result.token_count == 1883
+    assert result.quota_total == 24_450_668
+    assert result.quota_used == 20_668
+    assert result.quota_remaining == 24_430_000
+    assert result.estimated_amount == 0.041336
+    assert result.model_stats[0]["model"] == "gpt-5.6-sol"
+    assert result.model_stats[0]["token_count"] == 1883
+    assert result.model_stats[0]["estimated_cost_usd"] == 0.041336
+
+
+def test_collect_newapi_uses_user_scoped_log_endpoints(monkeypatch):
+    requested_urls = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "/api/user/self" in self.url:
+                return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
+            if "/api/log/self/stat" in self.url:
+                return {"success": True, "data": {"quota": 20_668, "rpm": 1, "tpm": 1883}}
+            if "/api/log/self" in self.url:
+                return {
+                    "success": True,
+                    "data": {
+                        "items": [
+                            {
+                                "model_name": "gpt-5.6-sol",
+                                "prompt_tokens": 971,
+                                "completion_tokens": 912,
+                                "quota": 20_668,
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "data": []}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested_urls.append(url)
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig("academic-key-3", "Blog", "newapi_admin", base_url="https://example", access_token="secret")
+    )
+
+    assert any("/api/log/self/stat" in url for url in requested_urls)
+    assert any("/api/log/self?" in url for url in requested_urls)
+    assert not any("/api/log/stat" in url for url in requested_urls)
+    assert result.request_count == 1
+    assert result.token_count == 1883
+    assert result.estimated_amount == 0.041336
+
+
+def test_collect_newapi_reports_success_false_payloads(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": False, "message": "Unauthorized, invalid access token"}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig("academic-key-3", "Blog", "newapi_admin", base_url="https://example", access_token="bad")
+    )
+
+    assert result.status == "offline"
+    assert result.error == "Unauthorized, invalid access token"
 
 
 def test_openai_pricing_estimates_cost_from_tokens():
