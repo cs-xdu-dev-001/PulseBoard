@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
+from urllib.parse import quote_plus
 
 import httpx
 from sqlalchemy.orm import Session
@@ -23,6 +25,9 @@ NEWAPI_ENDPOINTS = {
     "dashboard": ("/api/user/self",),
     "token_usage": ("/api/usage/token/",),
     "token_logs": ("/api/log/token",),
+    "token_search": "/api/token/search?p=1&page_size=1&token={api_key}",
+    "self_stat_by_token": "/api/log/self/stat?token_name={token_name}",
+    "self_logs_by_token": "/api/log/self?p=1&page_size=100&type=2&token_name={token_name}",
     "stat": ("/api/log/self/stat", "/api/log/stat"),
     "logs": ("/api/log/self?p=1&page_size=100&type=2", "/api/log/?p=1&page_size=100&type=2"),
 }
@@ -74,13 +79,33 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
                 client, config.base_url, NEWAPI_ENDPOINTS["dashboard"], account_headers
             )
         if config.api_key:
-            key_headers = {"Authorization": f"Bearer {config.api_key}"}
-            payloads["token_usage"] = _collect_newapi_payload(
-                client, config.base_url, NEWAPI_ENDPOINTS["token_usage"], key_headers
-            )
-            payloads["token_logs"] = _collect_newapi_payload(
-                client, config.base_url, NEWAPI_ENDPOINTS["token_logs"], key_headers
-            )
+            if config.access_token:
+                search_path = NEWAPI_ENDPOINTS["token_search"].format(api_key=quote_plus(config.api_key))
+                token_search = _collect_newapi_payload(client, config.base_url, (search_path,), account_headers)
+                payloads["token_usage"] = _token_usage_from_search(token_search)
+                token_name = _token_name_from_search(token_search)
+                if token_name:
+                    token_name_param = quote_plus(token_name)
+                    payloads["stat"] = _collect_newapi_payload(
+                        client,
+                        config.base_url,
+                        (NEWAPI_ENDPOINTS["self_stat_by_token"].format(token_name=token_name_param),),
+                        account_headers,
+                    )
+                    payloads["logs"] = _collect_newapi_payload(
+                        client,
+                        config.base_url,
+                        (NEWAPI_ENDPOINTS["self_logs_by_token"].format(token_name=token_name_param),),
+                        account_headers,
+                    )
+            else:
+                key_headers = {"Authorization": f"Bearer {config.api_key}"}
+                payloads["token_usage"] = _collect_newapi_payload(
+                    client, config.base_url, NEWAPI_ENDPOINTS["token_usage"], key_headers
+                )
+                payloads["token_logs"] = _collect_newapi_payload(
+                    client, config.base_url, NEWAPI_ENDPOINTS["token_logs"], key_headers
+                )
         elif config.access_token and not _is_auth_failure(payloads.get("dashboard", {})):
             for name in ("stat", "logs"):
                 payloads[name] = _collect_newapi_payload(
@@ -188,13 +213,72 @@ def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[st
                 raise RuntimeError(str(payload.get("message") or "New API request failed"))
             return payload
         except Exception as exc:
-            last_error = str(exc)
+            last_error = _sanitize_newapi_error(str(exc), headers)
     return {"_error": last_error or "New API request failed"}
+
+
+def _sanitize_newapi_error(message: str, headers: dict[str, str]) -> str:
+    sanitized = re.sub(r"([?&]token=)[^&'\"]+", r"\1[已脱敏]", message)
+    authorization = headers.get("Authorization") or ""
+    if authorization.lower().startswith("bearer "):
+        secret = authorization[7:].strip()
+        if secret:
+            sanitized = sanitized.replace(secret, "[已脱敏]")
+            sanitized = sanitized.replace(quote_plus(secret), "[已脱敏]")
+    return sanitized
 
 
 def _is_auth_failure(payload: dict) -> bool:
     message = str(payload.get("_error") or payload.get("message") or "").lower()
     return "unauthorized" in message or "invalid access token" in message
+
+
+def _token_usage_from_search(payload: dict) -> dict:
+    token = _token_row_from_search(payload)
+    if not token:
+        if isinstance(payload, dict) and payload.get("_error"):
+            return {"_error": payload["_error"]}
+        return {"_error": "New API token search returned no matching key"}
+    used = _number(token.get("used_quota"))
+    remaining = _number(token.get("remain_quota"))
+    return {
+        "code": True,
+        "message": "ok",
+        "data": {
+            "object": "token_usage",
+            "name": token.get("name"),
+            "total_granted": (used or 0) + (remaining or 0) if used is not None or remaining is not None else None,
+            "total_used": used,
+            "total_available": remaining,
+            "unlimited_quota": token.get("unlimited_quota"),
+            "expires_at": token.get("expired_time"),
+        },
+    }
+
+
+def _token_name_from_search(payload: dict) -> str | None:
+    token = _token_row_from_search(payload)
+    if not token:
+        return None
+    name = token.get("name")
+    return str(name) if name else None
+
+
+def _token_row_from_search(payload: dict) -> dict | None:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    items = data.get("items") if isinstance(data, dict) else None
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        return items[0]
+    return None
+
+
+def _number(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def get_or_create_source(db: Session, result: LlmUsageResult) -> LlmUsageSource:

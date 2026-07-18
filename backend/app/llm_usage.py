@@ -339,19 +339,20 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
     stat = _unwrap(payloads.get("stat"))
     logs = _unwrap(payloads.get("logs"))
     channels = _unwrap(payloads.get("channels"))
+    has_token_scope = "token_usage" in payloads or "token_logs" in payloads
 
     request_count = _coalesce_number(
         _first_number(stat, ["count", "request_count", "total_count"]),
-        _first_number(dashboard, ["count", "request_count", "total_count"]),
+        None if has_token_scope else _first_number(dashboard, ["count", "request_count", "total_count"]),
     )
     token_count = _coalesce_number(
         _first_number(stat, ["token", "tokens", "token_count", "total_tokens"]),
-        _first_number(dashboard, ["token", "tokens", "token_count", "total_tokens"]),
+        None if has_token_scope else _first_number(dashboard, ["token", "tokens", "token_count", "total_tokens"]),
     )
     quota_used = _coalesce_number(
         _first_number(token_usage, ["total_used", "used_quota", "quota_used"]),
         _first_number(stat, ["quota", "used_quota", "quota_used", "amount"]),
-        _first_number(dashboard, ["used_quota", "quota_used", "amount"]),
+        None if has_token_scope else _first_number(dashboard, ["used_quota", "quota_used", "amount"]),
     )
     rpm = _first_number(stat, ["rpm", "request_rpm"])
     tpm = _first_number(stat, ["tpm", "token_tpm"])
@@ -368,12 +369,12 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
     quota_used = _coalesce_number(quota_used, _sum_model_stats(model_stats, "amount"))
     quota_remaining = _coalesce_number(
         _first_number(token_usage, ["total_available", "remain_quota", "remaining_quota"]),
-        _first_number(dashboard, ["quota", "remaining_quota"]),
+        None if has_token_scope else _first_number(dashboard, ["quota", "remaining_quota"]),
     )
     dashboard_quota_used = _first_number(dashboard, ["used_quota"])
     quota_total = _coalesce_number(
         _first_number(token_usage, ["total_granted", "quota_total", "total_quota"]),
-        _first_number(dashboard, ["total_quota", "quota_total"]),
+        None if has_token_scope else _first_number(dashboard, ["total_quota", "quota_total"]),
     )
     account_quota_remaining = _first_number(dashboard, ["quota", "remaining_quota"])
     balance_total = _coalesce_number(_channel_balance_total(channels), _newapi_quota_usd(account_quota_remaining))

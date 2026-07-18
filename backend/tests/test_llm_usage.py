@@ -186,7 +186,7 @@ def test_collect_newapi_uses_user_scoped_log_endpoints(monkeypatch):
     assert result.estimated_amount == 0.041336
 
 
-def test_collect_newapi_uses_token_scoped_usage_when_api_key_is_configured(monkeypatch):
+def test_collect_newapi_uses_user_token_search_when_access_token_is_configured(monkeypatch):
     requested = []
 
     class FakeResponse:
@@ -199,35 +199,48 @@ def test_collect_newapi_uses_token_scoped_usage_when_api_key_is_configured(monke
         def json(self):
             if "/api/user/self" in self.url:
                 return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
-            if "/api/usage/token" in self.url:
-                return {
-                    "code": True,
-                    "message": "ok",
-                    "data": {
-                        "name": "codex-key",
-                        "total_granted": 2_000_000,
-                        "total_used": 400_000,
-                        "total_available": 1_600_000,
-                        "unlimited_quota": False,
-                    },
-                }
-            if "/api/log/token" in self.url:
+            if "/api/token/search" in self.url:
                 return {
                     "success": True,
-                    "data": [
-                        {
-                            "model_name": "gpt-5.6-sol",
-                            "prompt_tokens": 100,
-                            "completion_tokens": 50,
-                            "quota": 4000,
-                        },
-                        {
-                            "model_name": "deepseek-chat",
-                            "prompt_tokens": 80,
-                            "completion_tokens": 20,
-                            "quota": 1000,
-                        },
-                    ],
+                    "data": {
+                        "items": [
+                            {
+                                "name": "codex-key",
+                                "used_quota": 400_000,
+                                "remain_quota": 1_600_000,
+                                "unlimited_quota": False,
+                            }
+                        ]
+                    },
+                }
+            if "/api/log/self/stat" in self.url:
+                return {
+                    "success": True,
+                    "data": {
+                        "quota": 400_000,
+                        "rpm": 2,
+                        "tpm": 250,
+                    },
+                }
+            if "/api/log/self" in self.url:
+                return {
+                    "success": True,
+                    "data": {
+                        "items": [
+                            {
+                                "model_name": "gpt-5.6-sol",
+                                "prompt_tokens": 100,
+                                "completion_tokens": 50,
+                                "quota": 4000,
+                            },
+                            {
+                                "model_name": "deepseek-chat",
+                                "prompt_tokens": 80,
+                                "completion_tokens": 20,
+                                "quota": 1000,
+                            },
+                        ],
+                    },
                 }
             return {"success": True, "data": []}
 
@@ -258,12 +271,17 @@ def test_collect_newapi_uses_token_scoped_usage_when_api_key_is_configured(monke
         )
     )
 
-    usage_call = next(item for item in requested if "/api/usage/token" in item[0])
-    log_call = next(item for item in requested if "/api/log/token" in item[0])
+    search_call = next(item for item in requested if "/api/token/search" in item[0])
+    stat_call = next(item for item in requested if "/api/log/self/stat" in item[0])
+    log_call = next(item for item in requested if "/api/log/self" in item[0] and "/stat" not in item[0])
 
-    assert usage_call[1]["Authorization"] == "Bearer sk-token-key"
-    assert log_call[1]["Authorization"] == "Bearer sk-token-key"
-    assert not any("/api/log/self" in url for url, _headers in requested)
+    assert "token=sk-token-key" in search_call[0]
+    assert "token_name=codex-key" in stat_call[0]
+    assert "token_name=codex-key" in log_call[0]
+    assert search_call[1]["Authorization"] == "Bearer account-token"
+    assert log_call[1]["Authorization"] == "Bearer account-token"
+    assert not any("/api/usage/token" in url for url, _headers in requested)
+    assert not any("/api/log/token" in url for url, _headers in requested)
     assert result.status == "online"
     assert result.balance_currency == "USD"
     assert result.balance_total == 48.86
@@ -277,8 +295,8 @@ def test_collect_newapi_uses_token_scoped_usage_when_api_key_is_configured(monke
 
 def test_collect_newapi_key_usage_differs_per_api_key(monkeypatch):
     token_payloads = {
-        "sk-main": {"name": "main", "total_granted": 2_000_000, "total_used": 400_000, "total_available": 1_600_000},
-        "sk-backup": {"name": "backup", "total_granted": 1_000_000, "total_used": 50_000, "total_available": 950_000},
+        "sk-main": {"name": "main", "used_quota": 400_000, "remain_quota": 1_600_000},
+        "sk-backup": {"name": "backup", "used_quota": 50_000, "remain_quota": 950_000},
     }
 
     class FakeResponse:
@@ -290,22 +308,30 @@ def test_collect_newapi_key_usage_differs_per_api_key(monkeypatch):
             return None
 
         def json(self):
-            api_key = self.headers["Authorization"].removeprefix("Bearer ")
             if "/api/user/self" in self.url:
                 return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
-            if "/api/usage/token" in self.url:
-                return {"code": True, "message": "ok", "data": token_payloads[api_key]}
-            if "/api/log/token" in self.url:
+            if "/api/token/search" in self.url:
+                api_key = "sk-main" if "sk-main" in self.url else "sk-backup"
+                return {"success": True, "data": {"items": [token_payloads[api_key]]}}
+            if "/api/log/self/stat" in self.url:
+                token_name = "main" if "token_name=main" in self.url else "backup"
+                payload = next(item for item in token_payloads.values() if item["name"] == token_name)
+                return {"success": True, "data": {"quota": payload["used_quota"]}}
+            if "/api/log/self" in self.url:
+                token_name = "main" if "token_name=main" in self.url else "backup"
+                payload = next(item for item in token_payloads.values() if item["name"] == token_name)
                 return {
                     "success": True,
-                    "data": [
-                        {
-                            "model_name": "gpt-5.6-sol",
-                            "prompt_tokens": token_payloads[api_key]["total_used"],
-                            "completion_tokens": 0,
-                            "quota": token_payloads[api_key]["total_used"],
-                        }
-                    ],
+                    "data": {
+                        "items": [
+                            {
+                                "model_name": "gpt-5.6-sol",
+                                "prompt_tokens": payload["used_quota"],
+                                "completion_tokens": 0,
+                                "quota": payload["used_quota"],
+                            }
+                        ]
+                    },
                 }
             return {"success": True, "data": []}
 
@@ -332,6 +358,122 @@ def test_collect_newapi_key_usage_differs_per_api_key(monkeypatch):
     assert main.quota_remaining == 1_600_000
     assert backup.quota_remaining == 950_000
     assert main.quota_used != backup.quota_used
+
+
+def test_normalize_newapi_token_scope_error_does_not_reuse_account_usage():
+    result = normalize_newapi(
+        LlmUsageConfig("academic-main", "Main", "newapi_admin", base_url="https://example", api_key="sk-main"),
+        {
+            "dashboard": {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}},
+            "token_usage": {"_error": "HTTP 429 Too Many Requests"},
+        },
+    )
+
+    assert result.status == "degraded"
+    assert result.balance_total == 48.86
+    assert result.quota_remaining is None
+    assert result.quota_used is None
+
+
+def test_collect_newapi_token_search_error_redacts_query_secret(monkeypatch):
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            if "/api/user/self" in self.url:
+                return None
+            raise httpx.HTTPStatusError(
+                f"Client error '429 Too Many Requests' for url '{self.url}'",
+                request=httpx.Request("GET", self.url),
+                response=httpx.Response(429, request=httpx.Request("GET", self.url)),
+            )
+
+        def json(self):
+            if "/api/user/self" in self.url:
+                return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
+            return {}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig(
+            "academic-main",
+            "Main",
+            "newapi_admin",
+            base_url="https://example",
+            api_key="sk-secret-token-value",
+            access_token="account-token",
+        )
+    )
+
+    assert result.status == "degraded"
+    assert "sk-secret-token-value" not in result.error
+    assert "account-token" not in result.error
+    assert "token=[已脱敏]" in result.error
+
+
+def test_collect_newapi_falls_back_to_token_readonly_without_access_token(monkeypatch):
+    requested = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "/api/usage/token" in self.url:
+                return {
+                    "code": True,
+                    "data": {
+                        "name": "codex-key",
+                        "total_granted": 2_000_000,
+                        "total_used": 400_000,
+                        "total_available": 1_600_000,
+                    },
+                }
+            if "/api/log/token" in self.url:
+                return {"success": True, "data": [{"model_name": "gpt-5.6-sol", "quota": 400_000}]}
+            return {"success": True, "data": []}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested.append(url)
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig("academic-main", "Codex", "newapi_admin", base_url="https://example", api_key="sk-token-key")
+    )
+
+    assert any("/api/usage/token" in url for url in requested)
+    assert any("/api/log/token" in url for url in requested)
+    assert result.quota_remaining == 1_600_000
 
 
 def test_newapi_admin_url_accepts_openai_compatible_v1_base_url():
