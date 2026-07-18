@@ -86,7 +86,15 @@ def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
 
     if config.request_mode == "responses":
         resource = "responses"
-        payload = {"model": config.test_model, "input": "Reply with OK only."}
+        payload = {
+            "model": config.test_model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Reply with OK only."}],
+                }
+            ],
+        }
     elif config.request_mode == "chat_completions":
         resource = "chat/completions"
         payload = {

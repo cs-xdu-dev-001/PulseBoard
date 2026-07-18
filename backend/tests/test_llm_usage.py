@@ -257,7 +257,15 @@ def test_check_model_connection_uses_responses_endpoint(monkeypatch):
     assert request == {
         "url": "https://gateway.example.com/v1/responses",
         "headers": {"Authorization": "Bearer model-secret", "Content-Type": "application/json"},
-        "json": {"model": "gpt-5.4", "input": "Reply with OK only."},
+        "json": {
+            "model": "gpt-5.4",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Reply with OK only."}],
+                }
+            ],
+        },
         "timeout": 30,
     }
     assert result == {
