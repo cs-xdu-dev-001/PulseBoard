@@ -799,10 +799,65 @@ footer {
   border-top: 1px solid rgba(139, 220, 255, 0.1);
 }
 
+.provider-config-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px 20px 18px;
+  border-top: 1px solid rgba(139, 220, 255, 0.1);
+  background: rgba(139, 220, 255, 0.025);
+}
+
+.provider-config-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-config-title strong {
+  color: #e8fbff;
+  font-size: 15px;
+}
+
+.provider-config-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.provider-config-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(139, 220, 255, 0.13);
+  border-radius: 8px;
+  background: rgba(7, 13, 26, 0.46);
+}
+
+.provider-config-item span {
+  color: #82a4ba;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.provider-config-item strong {
+  overflow: hidden;
+  color: #e8fbff;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-config-item.warning strong {
+  color: #ffd166;
+}
+
 .provider-key-columns,
 .provider-key-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) 118px minmax(220px, 0.9fr) minmax(224px, auto);
+  grid-template-columns: minmax(160px, 1fr) minmax(142px, 0.45fr) minmax(220px, 0.9fr) minmax(224px, auto);
   align-items: center;
   gap: 14px;
   padding: 0 20px;
@@ -844,12 +899,22 @@ footer {
 }
 
 .secret-status {
+  display: block;
+  overflow: hidden;
   color: #ff9eea;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .secret-status.configured {
   color: #39ff9d;
+}
+
+.credential-stack {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }
 
 .key-test-status {
@@ -1463,6 +1528,8 @@ footer {
 :root[data-theme="light"] .llm-source-metrics strong,
 :root[data-theme="light"] .llm-settings-header h2,
 :root[data-theme="light"] .provider-settings-identity h3,
+:root[data-theme="light"] .provider-config-title strong,
+:root[data-theme="light"] .provider-config-item strong,
 :root[data-theme="light"] .provider-key-name strong,
 :root[data-theme="light"] .llm-key-editor-title h3,
 :root[data-theme="light"] .table-title,
@@ -1521,6 +1588,7 @@ footer {
 :root[data-theme="light"] .llm-settings-header span,
 :root[data-theme="light"] .provider-key-columns,
 :root[data-theme="light"] .provider-key-row,
+:root[data-theme="light"] .provider-config-item span,
 :root[data-theme="light"] .llm-key-editor-grid label > span,
 :root[data-theme="light"] .llm-key-editor-actions > span,
 :root[data-theme="light"] .settings-empty {
@@ -1592,6 +1660,7 @@ footer {
 
 :root[data-theme="light"] .llm-settings-header,
 :root[data-theme="light"] .provider-settings-row + .provider-settings-row,
+:root[data-theme="light"] .provider-config-panel,
 :root[data-theme="light"] .provider-key-list,
 :root[data-theme="light"] .provider-key-row,
 :root[data-theme="light"] .llm-provider-context,
@@ -1600,8 +1669,18 @@ footer {
 }
 
 :root[data-theme="light"] .llm-settings-header,
+:root[data-theme="light"] .provider-config-panel,
 :root[data-theme="light"] .provider-key-row {
   background: rgba(15, 34, 51, 0.025);
+}
+
+:root[data-theme="light"] .provider-config-item {
+  border-color: rgba(15, 34, 51, 0.09);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+:root[data-theme="light"] .provider-config-item.warning strong {
+  color: #936400;
 }
 
 :root[data-theme="light"] .llm-key-editor {
@@ -1822,6 +1901,10 @@ footer {
     display: none;
   }
 
+  .provider-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .provider-key-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px 16px;
@@ -1833,14 +1916,20 @@ footer {
     grid-column: 1 / -1;
   }
 
+  .credential-stack {
+    grid-column: 1;
+  }
+
+  .credential-stack::before {
+    content: "Key凭据";
+    color: #7890a3;
+    font-size: 13px;
+    font-weight: 650;
+  }
+
   .provider-key-row > span {
     grid-column: 1;
     white-space: normal;
-  }
-
-  .provider-key-row > span:nth-child(2)::before {
-    content: "配置：";
-    color: #7890a3;
   }
 
   .key-test-status {
@@ -1912,6 +2001,20 @@ footer {
     grid-row: auto;
     justify-self: start;
     flex-wrap: wrap;
+  }
+
+  .provider-config-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .provider-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-config-item strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .llm-key-editor-grid {

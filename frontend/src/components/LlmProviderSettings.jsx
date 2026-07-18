@@ -446,47 +446,47 @@ export function LlmProviderSettings() {
                 </div>
               </header>
               {expanded && (
-                <div className="provider-key-list">
-                  <div className="provider-key-columns" aria-hidden="true">
-                    <span>API Key</span>
-                    <span>配置状态</span>
-                    <span>连通性</span>
-                    <span>操作</span>
+                <>
+                  <ProviderConfigPanel item={providerMeta} onConfigureModel={() => openEditProvider(group)} />
+                  <div className="provider-key-list">
+                    <div className="provider-key-columns" aria-hidden="true">
+                      <span>API Key</span>
+                      <span>Key凭据</span>
+                      <span>连通性</span>
+                      <span>操作</span>
+                    </div>
+                    {group.items.map((item) => {
+                      const testing = Boolean(testingSources.get(item.source_id))
+                      const testResult = testResults.get(item.source_id)
+                      return (
+                        <div className="provider-key-row" key={item.source_id}>
+                          <div className="provider-key-name">
+                            <strong>{item.display_name}</strong>
+                            <code>{item.source_id}</code>
+                          </div>
+                          <CredentialBadges item={item} />
+                          <div className="key-test-status" aria-live="polite">
+                            <ConnectionResult label="统计" result={testResult?.statistics} testing={testing} />
+                            <ConnectionResult label="模型" result={testResult?.model} testing={testing} />
+                          </div>
+                          <div className="provider-key-actions">
+                            <button
+                              className="subtle-button test-button"
+                              type="button"
+                              aria-label={`测试 ${item.display_name}`}
+                              disabled={testing}
+                              onClick={() => handleTestKey(item)}
+                            >
+                              {testing ? '测试中' : '测试'}
+                            </button>
+                            <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEditKey(item)}>编辑</button>
+                            <button className="subtle-button danger-button" type="button" aria-label={`删除Key ${item.display_name}`} onClick={() => handleDeleteKey(item)}>删除Key</button>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
-                  {group.items.map((item) => {
-                    const testing = Boolean(testingSources.get(item.source_id))
-                    const testResult = testResults.get(item.source_id)
-                    const credentials = credentialState(item)
-                    return (
-                      <div className="provider-key-row" key={item.source_id}>
-                        <div className="provider-key-name">
-                          <strong>{item.display_name}</strong>
-                          <code>{item.source_id}</code>
-                        </div>
-                        <span className={credentials.complete ? 'secret-status configured' : 'secret-status'}>
-                          {credentials.label}
-                        </span>
-                        <div className="key-test-status" aria-live="polite">
-                          <ConnectionResult label="统计" result={testResult?.statistics} testing={testing} />
-                          <ConnectionResult label="模型" result={testResult?.model} testing={testing} />
-                        </div>
-                        <div className="provider-key-actions">
-                          <button
-                            className="subtle-button test-button"
-                            type="button"
-                            aria-label={`测试 ${item.display_name}`}
-                            disabled={testing}
-                            onClick={() => handleTestKey(item)}
-                          >
-                            {testing ? '测试中' : '测试'}
-                          </button>
-                          <button className="subtle-button" type="button" aria-label={`编辑 ${item.display_name}`} onClick={() => openEditKey(item)}>编辑</button>
-                          <button className="subtle-button danger-button" type="button" aria-label={`删除Key ${item.display_name}`} onClick={() => handleDeleteKey(item)}>删除Key</button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                </>
               )}
             </article>
           )
@@ -495,6 +495,38 @@ export function LlmProviderSettings() {
         {loading && <div className="settings-empty" role="status">正在读取LLM配置</div>}
       </div>
     </section>
+  )
+}
+
+function ProviderConfigPanel({ item, onConfigureModel }) {
+  const missingModel = !item.test_model
+  return (
+    <section className="provider-config-panel">
+      <div className="provider-config-title">
+        <strong>供应商配置</strong>
+        {missingModel && <button className="subtle-button" type="button" onClick={onConfigureModel}>配置模型</button>}
+      </div>
+      <div className="provider-config-grid">
+        {providerConfigItems(item).map((entry) => (
+          <div className={`provider-config-item ${entry.warning ? 'warning' : ''}`} key={entry.label}>
+            <span>{entry.label}</span>
+            <strong title={entry.value}>{entry.value}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function CredentialBadges({ item }) {
+  return (
+    <div className="credential-stack">
+      {credentialItems(item).map((entry) => (
+        <span className={`secret-status ${entry.complete ? 'configured' : ''}`} key={entry.label}>
+          {entry.text}
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -564,6 +596,49 @@ function providerEndpointText(item) {
   return item.source_type === 'newapi_admin' ? item.base_url || '未配置接口' : '官方接口'
 }
 
+function providerConfigItems(item) {
+  if (item.source_type === 'newapi_admin') {
+    return [
+      { label: '接入类型', value: sourceTypeText(item.source_type) },
+      { label: 'Base URL', value: item.base_url || '未配置接口', warning: !item.base_url },
+      { label: '管理统计', value: newApiAdminEndpointText(item), warning: !item.base_url },
+      { label: '模型接口', value: modelEndpointText(item), warning: !item.base_url },
+      { label: 'User ID', value: item.user_id || '1' },
+      { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
+      { label: '测试模型', value: item.test_model || '未配置', warning: !item.test_model },
+    ]
+  }
+  return [
+    { label: '接入类型', value: sourceTypeText(item.source_type) },
+    { label: '余额接口', value: deepseekBalanceEndpointText() },
+    { label: '模型接口', value: modelEndpointText(item) },
+    { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
+    { label: '测试模型', value: item.test_model || defaultTestModel(item.source_type) || '未配置', warning: !item.test_model },
+  ]
+}
+
+function credentialItems(item) {
+  if (item.source_type !== 'newapi_admin') {
+    return [{
+      label: 'api_key',
+      complete: Boolean(item.has_api_key),
+      text: item.has_api_key ? 'API Key已填写' : '缺API Key',
+    }]
+  }
+  return [
+    {
+      label: 'access_token',
+      complete: Boolean(item.has_access_token),
+      text: item.has_access_token ? '统计令牌已填写' : '缺统计令牌',
+    },
+    {
+      label: 'api_key',
+      complete: Boolean(item.has_api_key),
+      text: item.has_api_key ? '模型Key已填写' : '缺模型Key',
+    },
+  ]
+}
+
 function credentialState(item) {
   if (item.source_type !== 'newapi_admin') {
     return { complete: Boolean(item.has_api_key), label: item.has_api_key ? 'API Key已填写' : '缺API Key' }
@@ -604,6 +679,40 @@ function defaultTestModel(sourceType) {
 
 function requestModeText(requestMode) {
   return requestMode === 'chat_completions' ? 'Chat Completions' : 'Responses'
+}
+
+function newApiAdminEndpointText(item) {
+  const base = normalizedNewApiBase(item.base_url)
+  return base ? `${base}/api/user/self` : '未配置接口'
+}
+
+function modelEndpointText(item) {
+  const base = modelBaseUrl(item)
+  if (!base) return '未配置接口'
+  const resource = (item.request_mode || defaultRequestMode(item.source_type)) === 'chat_completions'
+    ? 'chat/completions'
+    : 'responses'
+  return `${base}/${resource}`
+}
+
+function modelBaseUrl(item) {
+  if (item.source_type === 'deepseek_balance') {
+    const deepseekBase = String(item.base_url || 'https://api.deepseek.com').trim().replace(/\/+$/, '')
+    return deepseekBase.endsWith('/v1') ? deepseekBase : `${deepseekBase}/v1`
+  }
+  const baseUrl = String(item.base_url || '').trim().replace(/\/+$/, '')
+  if (!baseUrl) return ''
+  return baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`
+}
+
+function normalizedNewApiBase(baseUrl) {
+  const normalized = String(baseUrl || '').trim().replace(/\/+$/, '')
+  if (!normalized) return ''
+  return normalized.endsWith('/v1') ? normalized.slice(0, -3) : normalized
+}
+
+function deepseekBalanceEndpointText() {
+  return 'https://api.deepseek.com/user/balance'
 }
 
 function requestConfigText(item) {

@@ -377,6 +377,47 @@ describe('Settings LLM供应商配置', () => {
     expect(within(deepseek).getByText('凭据已填写')).toBeVisible()
   })
 
+  it('展开New API供应商后显示完整公共配置', async () => {
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-academic')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
+    const panel = within(provider).getByText('供应商配置').closest('.provider-config-panel')
+
+    expect(within(panel).getByText('管理统计')).toBeVisible()
+    expect(within(panel).getByText('https://gateway.example.com/api/user/self')).toBeVisible()
+    expect(within(panel).getByText('模型接口')).toBeVisible()
+    expect(within(panel).getByText('https://gateway.example.com/v1/responses')).toBeVisible()
+    expect(within(panel).getByText('User ID')).toBeVisible()
+    expect(within(panel).getByText('1')).toBeVisible()
+    expect(within(panel).getByText('测试模型')).toBeVisible()
+    expect(within(panel).getByText('gpt-5.4')).toBeVisible()
+  })
+
+  it('测试模型缺失时在公共配置区提供配置入口', async () => {
+    fetchLlmConfig.mockResolvedValueOnce({
+      sources: [
+        {
+          ...llmSources[2],
+          provider_name: 'EduModel',
+          base_url: 'https://academicedu.me',
+          test_model: '',
+        },
+      ],
+    })
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-academic')
+    fireEvent.click(within(provider).getByRole('button', { name: '展开EduModel的Key' }))
+    const panel = within(provider).getByText('供应商配置').closest('.provider-config-panel')
+    expect(within(panel).getByText('未配置')).toBeVisible()
+
+    fireEvent.click(within(panel).getByRole('button', { name: '配置模型' }))
+
+    expect(screen.getByRole('heading', { name: '编辑EduModel' })).toBeVisible()
+    expect(screen.getByLabelText('测试模型')).toHaveValue('')
+  })
+
   it('保存后重新加载失败时保留编辑器并显示错误', async () => {
     fetchLlmConfig
       .mockResolvedValueOnce({ sources: llmSources })
