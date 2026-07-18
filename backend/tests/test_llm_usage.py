@@ -256,9 +256,14 @@ def test_check_model_connection_uses_responses_endpoint(monkeypatch):
 
     assert request == {
         "url": "https://gateway.example.com/v1/responses",
-        "headers": {"Authorization": "Bearer model-secret", "Content-Type": "application/json"},
+        "headers": {
+            "Authorization": "Bearer model-secret",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
         "json": {
             "model": "gpt-5.4",
+            "stream": True,
             "input": [
                 {
                     "role": "user",

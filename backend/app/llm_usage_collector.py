@@ -88,6 +88,7 @@ def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
         resource = "responses"
         payload = {
             "model": config.test_model,
+            "stream": True,
             "input": [
                 {
                     "role": "user",
@@ -105,9 +106,12 @@ def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
         return _model_connection_result(config, "not_configured", "模型请求方式无效")
 
     try:
+        headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
+        if config.request_mode == "responses":
+            headers["Accept"] = "text/event-stream"
         response = httpx.post(
             _model_api_url(base_url, resource),
-            headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+            headers=headers,
             json=payload,
             timeout=30,
         )
