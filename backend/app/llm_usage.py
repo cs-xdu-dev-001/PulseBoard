@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from app.config import ROOT_DIR, Settings
-from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
+from app.llm_pricing import NEWAPI_QUOTA_PER_USD, estimate_model_cost_usd, estimate_snapshot_cost_usd
 
 _ENV_UPDATE_LOCK = RLock()
 
@@ -334,6 +334,8 @@ def normalize_deepseek_balance(config: LlmUsageConfig, payload: dict[str, Any]) 
 
 def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsageResult:
     dashboard = _unwrap(payloads.get("dashboard"))
+    token_usage = _unwrap(payloads.get("token_usage"))
+    token_logs = _unwrap(payloads.get("token_logs"))
     stat = _unwrap(payloads.get("stat"))
     logs = _unwrap(payloads.get("logs"))
     channels = _unwrap(payloads.get("channels"))
@@ -347,6 +349,7 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
         _first_number(dashboard, ["token", "tokens", "token_count", "total_tokens"]),
     )
     quota_used = _coalesce_number(
+        _first_number(token_usage, ["total_used", "used_quota", "quota_used"]),
         _first_number(stat, ["quota", "used_quota", "quota_used", "amount"]),
         _first_number(dashboard, ["used_quota", "quota_used", "amount"]),
     )
@@ -354,28 +357,39 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
     tpm = _first_number(stat, ["tpm", "token_tpm"])
     success_rate = _first_number(stat, ["success_rate"])
     avg_latency = _first_number(stat, ["avg_latency", "avg_latency_seconds", "latency"])
-    model_stats = _model_stats_from(logs) or _model_stats_from(stat) or _model_stats_from(dashboard)
+    model_stats = (
+        _model_stats_from(token_logs)
+        or _model_stats_from(logs)
+        or _model_stats_from(stat)
+        or _model_stats_from(dashboard)
+    )
     request_count = _coalesce_number(request_count, _sum_model_stats(model_stats, "request_count"))
     token_count = _coalesce_number(token_count, _sum_model_stats(model_stats, "token_count"))
     quota_used = _coalesce_number(quota_used, _sum_model_stats(model_stats, "amount"))
-    quota_remaining = _first_number(dashboard, ["quota", "remaining_quota"])
+    quota_remaining = _coalesce_number(
+        _first_number(token_usage, ["total_available", "remain_quota", "remaining_quota"]),
+        _first_number(dashboard, ["quota", "remaining_quota"]),
+    )
     dashboard_quota_used = _first_number(dashboard, ["used_quota"])
-    quota_total = _first_number(dashboard, ["total_quota", "quota_total"])
-    balance_total = _channel_balance_total(channels)
+    quota_total = _coalesce_number(
+        _first_number(token_usage, ["total_granted", "quota_total", "total_quota"]),
+        _first_number(dashboard, ["total_quota", "quota_total"]),
+    )
+    account_quota_remaining = _first_number(dashboard, ["quota", "remaining_quota"])
+    balance_total = _coalesce_number(_channel_balance_total(channels), _newapi_quota_usd(account_quota_remaining))
+    balance_currency = "USD" if balance_total is not None else None
     if quota_total is None and quota_remaining is not None and dashboard_quota_used is not None:
         quota_total = quota_remaining + dashboard_quota_used
-    if quota_total is None:
-        quota_total = balance_total
     if quota_remaining is None and quota_total is not None and quota_used is not None:
         quota_remaining = quota_total - quota_used
 
-    estimated_cost = estimate_snapshot_cost_usd(model_stats=model_stats, token_count=token_count, raw_quota=quota_used)
+    estimated_cost = estimate_snapshot_cost_usd(raw_quota=quota_used)
     errors = [
         str(value.get("_error"))
         for value in payloads.values()
         if isinstance(value, dict) and value.get("_error")
     ]
-    core_names = [name for name in ("dashboard", "stat", "logs") if name in payloads]
+    core_names = [name for name in ("token_usage", "token_logs", "dashboard", "stat", "logs") if name in payloads]
     all_core_failed = bool(core_names) and all(
         isinstance(payloads.get(name), dict) and payloads.get(name, {}).get("_error") for name in core_names
     )
@@ -384,6 +398,7 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
         display_name=config.display_name,
         source_type=config.source_type,
         status="offline" if all_core_failed else "degraded" if errors else "online",
+        balance_currency=balance_currency,
         balance_total=balance_total,
         quota_total=quota_total,
         quota_used=quota_used,
@@ -398,6 +413,8 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
         model_stats=model_stats,
         raw_summary={
             "dashboard": _safe_summary(dashboard),
+            "token_usage": _safe_summary(token_usage),
+            "token_logs": _safe_summary(token_logs),
             "stat": _safe_summary(stat),
             "logs": _safe_summary(logs),
             "channels": _safe_summary(channels),
@@ -516,6 +533,13 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _newapi_quota_usd(value: Any) -> float | None:
+    quota = _to_float(value)
+    if quota is None:
+        return None
+    return round(quota / NEWAPI_QUOTA_PER_USD, 6)
 
 
 def _unwrap(value: Any) -> Any:

@@ -687,6 +687,8 @@ def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = Non
 
 
 def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
+    if snapshot.estimated_amount is not None and (snapshot.raw_summary or {}).get("token_usage"):
+        return snapshot.estimated_amount
     return estimate_snapshot_cost_usd(
         model_stats=snapshot.model_stats or [],
         token_count=snapshot.token_count,

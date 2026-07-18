@@ -21,6 +21,8 @@ from app.models import LlmUsageSnapshot, LlmUsageSource
 
 NEWAPI_ENDPOINTS = {
     "dashboard": ("/api/user/self",),
+    "token_usage": ("/api/usage/token/",),
+    "token_logs": ("/api/log/token",),
     "stat": ("/api/log/self/stat", "/api/log/stat"),
     "logs": ("/api/log/self?p=1&page_size=100&type=2", "/api/log/?p=1&page_size=100&type=2"),
 }
@@ -59,19 +61,31 @@ def collect_deepseek(config: LlmUsageConfig) -> LlmUsageResult:
 def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     if not config.base_url:
         return error_result(config, "New API base URL is not configured")
-    if not config.access_token:
-        return error_result(config, "New API access token is not configured")
-    headers = {
-        "Authorization": f"Bearer {config.access_token}",
-        "New-Api-User": config.user_id,
-    }
+    if not config.api_key and not config.access_token:
+        return error_result(config, "New API API key or access token is not configured")
     payloads = {}
     with httpx.Client(timeout=20) as client:
-        payloads["dashboard"] = _collect_newapi_payload(client, config.base_url, NEWAPI_ENDPOINTS["dashboard"], headers)
-        if _is_auth_failure(payloads["dashboard"]):
-            return normalize_newapi(config, payloads)
-        for name in ("stat", "logs"):
-            payloads[name] = _collect_newapi_payload(client, config.base_url, NEWAPI_ENDPOINTS[name], headers)
+        if config.access_token:
+            account_headers = {
+                "Authorization": f"Bearer {config.access_token}",
+                "New-Api-User": config.user_id,
+            }
+            payloads["dashboard"] = _collect_newapi_payload(
+                client, config.base_url, NEWAPI_ENDPOINTS["dashboard"], account_headers
+            )
+        if config.api_key:
+            key_headers = {"Authorization": f"Bearer {config.api_key}"}
+            payloads["token_usage"] = _collect_newapi_payload(
+                client, config.base_url, NEWAPI_ENDPOINTS["token_usage"], key_headers
+            )
+            payloads["token_logs"] = _collect_newapi_payload(
+                client, config.base_url, NEWAPI_ENDPOINTS["token_logs"], key_headers
+            )
+        elif config.access_token and not _is_auth_failure(payloads.get("dashboard", {})):
+            for name in ("stat", "logs"):
+                payloads[name] = _collect_newapi_payload(
+                    client, config.base_url, NEWAPI_ENDPOINTS[name], account_headers
+                )
     return normalize_newapi(config, payloads)
 
 
@@ -169,6 +183,8 @@ def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[st
             response.raise_for_status()
             payload = response.json()
             if isinstance(payload, dict) and payload.get("success") is False:
+                raise RuntimeError(str(payload.get("message") or "New API request failed"))
+            if isinstance(payload, dict) and payload.get("code") is False:
                 raise RuntimeError(str(payload.get("message") or "New API request failed"))
             return payload
         except Exception as exc:

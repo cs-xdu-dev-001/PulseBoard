@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 
 import {
@@ -86,4 +86,46 @@ it('同一供应商多个Key返回相同余额时只计一次账户余额', asyn
   expect(await screen.findByText('DeepSeek')).toBeVisible()
   expect(screen.getAllByText('CNY 48.86').length).toBeGreaterThanOrEqual(2)
   expect(screen.queryByText('CNY 146.58')).not.toBeInTheDocument()
+})
+
+it('New API供应商展开后显示每个Key自己的可用额度', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '主Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+        balance_currency: 'USD',
+        balance_total: 48.86,
+        quota_remaining_usd: 3.2,
+      },
+      {
+        source_id: 'academic-backup',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '备用Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+        balance_currency: 'USD',
+        balance_total: 48.86,
+        quota_remaining_usd: 1.9,
+      },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  const provider = await screen.findByText('EduModel')
+  const card = provider.closest('.llm-provider-card')
+  expect(within(card).getByText('USD 48.86')).toBeVisible()
+
+  fireEvent.click(card)
+
+  const mainRow = within(card).getByText('主Key').closest('.llm-key-row')
+  const backupRow = within(card).getByText('备用Key').closest('.llm-key-row')
+  expect(within(mainRow).getByText('$3.2000')).toBeVisible()
+  expect(within(backupRow).getByText('$1.9000')).toBeVisible()
 })

@@ -133,7 +133,7 @@ describe('Settings LLM供应商配置', () => {
     fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
     fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'backup' } })
     fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: '备用账号' } })
-    fireEvent.change(screen.getByLabelText('统计访问令牌'), { target: { value: 'token-value' } })
+    fireEvent.change(screen.getByLabelText('账号余额令牌'), { target: { value: 'token-value' } })
     fireEvent.change(screen.getByLabelText('模型API Key'), { target: { value: 'model-key-value' } })
 
     expect(screen.queryByLabelText('接入类型')).not.toBeInTheDocument()
@@ -180,12 +180,12 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '留空则保留原密钥')
   })
 
-  it('New API分别显示统计令牌和模型Key的配置状态', async () => {
+  it('New API分别显示余额令牌和模型Key的配置状态', async () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-academic')
     fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
-    expect(within(provider).getByText('缺统计令牌')).toBeVisible()
+    expect(within(provider).getByText('未填余额令牌')).toBeVisible()
   })
 
   it('可以测试单个Key并在对应行显示在线状态', async () => {
@@ -319,7 +319,7 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('User ID')).toHaveValue('1')
     expect(screen.getByLabelText('模型请求方式')).toHaveValue('responses')
     expect(screen.getByLabelText('测试模型')).toHaveValue('gpt-5.4')
-    expect(screen.queryByLabelText('统计访问令牌')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('账号余额令牌')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('模型API Key')).not.toBeInTheDocument()
 
@@ -372,7 +372,7 @@ describe('Settings LLM供应商配置', () => {
     const deepseek = screen.getByTestId('llm-provider-deepseek')
     expect(within(academic).getByText('New API')).toBeVisible()
     expect(within(academic).getByText('https://gateway.example.com')).toBeVisible()
-    expect(within(academic).getByText('1个Key凭据不完整')).toBeVisible()
+    expect(within(academic).getByText('凭据已填写')).toBeVisible()
     expect(within(academic).getByText('Responses · gpt-5.4')).toBeVisible()
     expect(within(deepseek).getByText('凭据已填写')).toBeVisible()
   })

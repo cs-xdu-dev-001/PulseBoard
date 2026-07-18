@@ -378,12 +378,12 @@ export function LlmProviderSettings() {
                   ) : (
                     <>
                       <label className="llm-secret-field">
-                        <span>统计访问令牌</span>
+                        <span>账号余额令牌</span>
                         <input
                           type="password"
                           value={editor.access_token}
                           onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
-                          placeholder={isExistingKey ? '留空则保留原令牌' : 'New API access token'}
+                          placeholder={isExistingKey ? '留空则保留原令牌' : '可选，用于账号余额'}
                         />
                       </label>
                       <label className="llm-secret-field">
@@ -629,7 +629,7 @@ function credentialItems(item) {
     {
       label: 'access_token',
       complete: Boolean(item.has_access_token),
-      text: item.has_access_token ? '统计令牌已填写' : '缺统计令牌',
+      text: item.has_access_token ? '余额令牌已填写' : '未填余额令牌',
     },
     {
       label: 'api_key',
@@ -643,9 +643,7 @@ function credentialState(item) {
   if (item.source_type !== 'newapi_admin') {
     return { complete: Boolean(item.has_api_key), label: item.has_api_key ? 'API Key已填写' : '缺API Key' }
   }
-  if (item.has_access_token && item.has_api_key) return { complete: true, label: '两类凭据已填写' }
-  if (!item.has_access_token && !item.has_api_key) return { complete: false, label: '两类凭据未填写' }
-  if (!item.has_access_token) return { complete: false, label: '缺统计令牌' }
+  if (item.has_api_key) return { complete: true, label: item.has_access_token ? 'Key和余额令牌已填写' : 'Key已填写' }
   return { complete: false, label: '缺模型Key' }
 }
 

@@ -402,6 +402,9 @@ function formatBalanceValue(balance) {
 }
 
 function formatKeyBalance(item) {
+  if (item.source_type === 'newapi_admin' && item.quota_remaining_usd != null) {
+    return formatUsd(item.quota_remaining_usd)
+  }
   if (item.balance_total != null) return formatMoney(item.balance_total, item.balance_currency)
   if (item.quota_remaining_usd != null) return formatUsd(item.quota_remaining_usd)
   return '--'
