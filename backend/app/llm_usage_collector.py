@@ -67,8 +67,11 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     }
     payloads = {}
     with httpx.Client(timeout=20) as client:
-        for name, paths in NEWAPI_ENDPOINTS.items():
-            payloads[name] = _collect_newapi_payload(client, config.base_url, paths, headers)
+        payloads["dashboard"] = _collect_newapi_payload(client, config.base_url, NEWAPI_ENDPOINTS["dashboard"], headers)
+        if _is_auth_failure(payloads["dashboard"]):
+            return normalize_newapi(config, payloads)
+        for name in ("stat", "logs"):
+            payloads[name] = _collect_newapi_payload(client, config.base_url, NEWAPI_ENDPOINTS[name], headers)
     return normalize_newapi(config, payloads)
 
 
@@ -171,6 +174,11 @@ def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[st
         except Exception as exc:
             last_error = str(exc)
     return {"_error": last_error or "New API request failed"}
+
+
+def _is_auth_failure(payload: dict) -> bool:
+    message = str(payload.get("_error") or payload.get("message") or "").lower()
+    return "unauthorized" in message or "invalid access token" in message
 
 
 def get_or_create_source(db: Session, result: LlmUsageResult) -> LlmUsageSource:

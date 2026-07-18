@@ -229,6 +229,44 @@ def test_collect_newapi_reports_success_false_payloads(monkeypatch):
     assert result.error == "Unauthorized, invalid access token"
 
 
+def test_collect_newapi_stops_after_dashboard_auth_failure(monkeypatch):
+    requested_urls = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": False, "message": "Unauthorized, invalid access token"}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested_urls.append(url)
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig("academic-key-3", "Blog", "newapi_admin", base_url="https://example", access_token="bad")
+    )
+
+    assert requested_urls == ["https://example/api/user/self"]
+    assert result.status == "offline"
+    assert result.error == "Unauthorized, invalid access token"
+
+
 def test_check_model_connection_uses_responses_endpoint(monkeypatch):
     request = {}
 
