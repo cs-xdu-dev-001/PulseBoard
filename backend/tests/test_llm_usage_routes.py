@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -235,6 +235,41 @@ def test_llm_usage_series_includes_model_area_series():
     assert payload["model_series"][0]["model"] == "gpt-4.1-mini"
     assert payload["model_series"][0]["points"][0]["estimated_cost_usd"] == 2.0
     assert payload["model_series"][0]["points"][0]["request_count"] == 10
+
+
+def test_llm_usage_series_limits_points_per_source():
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        for index in range(320):
+            db.add(
+                LlmUsageSnapshot(
+                    source_id=source.id,
+                    collected_at=now - timedelta(minutes=319 - index),
+                    range_key="latest",
+                    request_count=index,
+                    token_count=index,
+                    quota_used=index,
+                    estimated_amount=index,
+                    model_stats=[{"model": "gpt-4.1-mini", "request_count": index, "amount": index}],
+                    raw_summary={},
+                )
+            )
+        db.commit()
+
+    payload = client.get("/api/llm/usage/series?range=24h").json()
+
+    assert len(payload["series"][0]["points"]) == 288
+    assert len(payload["model_series"][0]["points"]) == 288
+    assert payload["series"][0]["points"][0]["request_count"] == 32
 
 
 def test_save_llm_usage_config_returns_422_detail(monkeypatch):

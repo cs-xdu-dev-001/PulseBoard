@@ -26,6 +26,7 @@ from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSou
 from app.settings_config import load_app_settings, save_app_settings
 
 router = APIRouter(prefix="/api")
+LLM_SERIES_POINTS_PER_SOURCE = {"today": 288, "24h": 288, "7d": 672}
 
 
 class LlmUsageConfigPayload(BaseModel):
@@ -360,13 +361,16 @@ def llm_usage_series(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    rows = _llm_snapshots(db, range, source, _configured_llm_source_ids())
+    rows = _llm_snapshot_rows(
+        db,
+        range,
+        source,
+        _configured_llm_source_ids(),
+        per_source_limit=_llm_series_point_limit(range),
+    )
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
-    for row in rows:
-        source_row = db.get(LlmUsageSource, row.source_id)
-        if source_row is None:
-            continue
+    for row, source_row in rows:
         item = series_by_source.setdefault(
             source_row.id,
             {
@@ -593,28 +597,50 @@ def _configured_llm_source_ids() -> list[str]:
     return [config["source_id"] for config in list_llm_usage_config(get_settings())]
 
 
-def _llm_snapshots(
+def _llm_source_rows(
+    db: Session,
+    source_id: str | None,
+    configured_source_ids: list[str] | None = None,
+) -> list[LlmUsageSource]:
+    if source_id:
+        if configured_source_ids is not None and source_id not in configured_source_ids:
+            return []
+        stmt = select(LlmUsageSource).where(LlmUsageSource.source_id == source_id)
+    elif configured_source_ids is not None:
+        if not configured_source_ids:
+            return []
+        stmt = select(LlmUsageSource).where(LlmUsageSource.source_id.in_(configured_source_ids))
+    else:
+        stmt = select(LlmUsageSource)
+    return db.scalars(stmt).all()
+
+
+def _llm_snapshot_rows(
     db: Session,
     range_value: str,
     source_id: str | None,
     configured_source_ids: list[str] | None = None,
-) -> list[LlmUsageSnapshot]:
+    per_source_limit: int | None = None,
+) -> list[tuple[LlmUsageSnapshot, LlmUsageSource]]:
     since, until = _llm_range_bounds(range_value)
-    stmt = (
-        select(LlmUsageSnapshot)
-        .join(LlmUsageSource, LlmUsageSource.id == LlmUsageSnapshot.source_id)
-        .where(LlmUsageSnapshot.collected_at >= since, LlmUsageSnapshot.collected_at <= until)
-        .order_by(LlmUsageSnapshot.collected_at)
-    )
-    if source_id:
-        if configured_source_ids is not None and source_id not in configured_source_ids:
-            return []
-        stmt = stmt.where(LlmUsageSource.source_id == source_id)
-    elif configured_source_ids is not None:
-        if not configured_source_ids:
-            return []
-        stmt = stmt.where(LlmUsageSource.source_id.in_(configured_source_ids))
-    return db.scalars(stmt).all()
+    source_rows = _llm_source_rows(db, source_id, configured_source_ids)
+    rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]] = []
+    for source_row in source_rows:
+        stmt = select(LlmUsageSnapshot).where(
+            LlmUsageSnapshot.source_id == source_row.id,
+            LlmUsageSnapshot.collected_at >= since,
+            LlmUsageSnapshot.collected_at <= until,
+        )
+        if per_source_limit is not None:
+            stmt = stmt.order_by(desc(LlmUsageSnapshot.collected_at), desc(LlmUsageSnapshot.id)).limit(
+                per_source_limit
+            )
+            snapshots = list(reversed(db.scalars(stmt).all()))
+        else:
+            stmt = stmt.order_by(LlmUsageSnapshot.collected_at, LlmUsageSnapshot.id)
+            snapshots = db.scalars(stmt).all()
+        rows.extend((snapshot, source_row) for snapshot in snapshots)
+    return sorted(rows, key=lambda item: (item[0].collected_at, item[0].id))
 
 
 def _latest_llm_snapshots(
@@ -623,10 +649,12 @@ def _latest_llm_snapshots(
     source_id: str | None,
     configured_source_ids: list[str] | None = None,
 ) -> list[LlmUsageSnapshot]:
-    latest = {}
-    for snapshot in _llm_snapshots(db, range_value, source_id, configured_source_ids):
-        latest[snapshot.source_id] = snapshot
-    return list(latest.values())
+    rows = _llm_snapshot_rows(db, range_value, source_id, configured_source_ids, per_source_limit=1)
+    return [snapshot for snapshot, _source in rows]
+
+
+def _llm_series_point_limit(range_value: str) -> int:
+    return LLM_SERIES_POINTS_PER_SOURCE.get(range_value, 288)
 
 
 def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = None) -> dict:

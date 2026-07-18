@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -156,6 +156,9 @@ class LlmUsageSource(Base):
 
 class LlmUsageSnapshot(Base):
     __tablename__ = "llm_usage_snapshots"
+    __table_args__ = (
+        Index("ix_llm_usage_snapshots_source_collected_id", "source_id", "collected_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("llm_usage_sources.id"), nullable=False, index=True)
