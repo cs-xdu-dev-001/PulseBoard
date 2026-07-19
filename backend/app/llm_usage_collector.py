@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from urllib.parse import quote_plus
 
@@ -16,6 +16,7 @@ from app.llm_usage import (
     load_llm_usage_configs,
     newapi_url,
     normalize_deepseek_balance,
+    normalize_deepseek_platform,
     normalize_newapi,
 )
 from app.models import LlmUsageSnapshot, LlmUsageSource
@@ -30,6 +31,11 @@ NEWAPI_ENDPOINTS = {
     "self_logs_by_token": "/api/log/self?p=1&page_size=100&type=2&token_name={token_name}&{time_query}",
     "stat": ("/api/log/self/stat?type=2&{time_query}", "/api/log/stat?type=2&{time_query}"),
     "logs": ("/api/log/self?p=1&page_size=100&type=2&{time_query}", "/api/log/?p=1&page_size=100&type=2&{time_query}"),
+}
+DEEPSEEK_PLATFORM_BASE_URL = "https://platform.deepseek.com"
+DEEPSEEK_PLATFORM_ENDPOINTS = {
+    "amount": "/api/v0/usage/by_api_key/amount?start={start}&end={end}&tz=0",
+    "cost": "/api/v0/usage/by_api_key/cost?start={start}&end={end}&tz=0",
 }
 
 
@@ -46,6 +52,8 @@ def collect_source(config: LlmUsageConfig) -> LlmUsageResult:
     try:
         if config.source_type == "deepseek_balance":
             return collect_deepseek(config)
+        if config.source_type == "deepseek_platform":
+            return collect_deepseek_platform(config)
         if config.source_type == "newapi_admin":
             return collect_newapi(config)
         return error_result(config, f"Unsupported LLM usage source type: {config.source_type}")
@@ -63,6 +71,28 @@ def collect_deepseek(config: LlmUsageConfig) -> LlmUsageResult:
     )
     response.raise_for_status()
     return normalize_deepseek_balance(config, response.json())
+
+
+def collect_deepseek_platform(config: LlmUsageConfig) -> LlmUsageResult:
+    if not config.access_token:
+        return error_result(config, "DeepSeek platform token is not configured")
+    start, end = _deepseek_platform_range()
+    headers = _deepseek_platform_headers(config.access_token)
+    payloads = {}
+    with httpx.Client(timeout=20) as client:
+        for name, template in DEEPSEEK_PLATFORM_ENDPOINTS.items():
+            payloads[name] = _collect_deepseek_platform_payload(
+                client,
+                f"{DEEPSEEK_PLATFORM_BASE_URL}{template.format(start=start, end=end)}",
+                headers,
+            )
+        if config.api_key:
+            payloads["balance"] = _collect_deepseek_platform_payload(
+                client,
+                deepseek_balance_url(),
+                {"Authorization": f"Bearer {config.api_key}"},
+            )
+    return normalize_deepseek_platform(config, payloads)
 
 
 def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
@@ -127,6 +157,29 @@ def _today_timestamp_query(now: datetime | None = None) -> str:
     return f"start_timestamp={int(start.timestamp())}&end_timestamp={int(end.timestamp())}"
 
 
+def _deepseek_platform_range(now: datetime | None = None) -> tuple[int, int]:
+    current = now or datetime.now(timezone.utc)
+    end = current.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    start = end - timedelta(days=7)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def _deepseek_platform_headers(access_token: str) -> dict[str, str]:
+    token = access_token.strip()
+    if not token.lower().startswith("bearer "):
+        token = f"Bearer {token}"
+    return {
+        "Authorization": token,
+        "Accept": "*/*",
+        "Referer": "https://platform.deepseek.com/usage",
+        "x-client-bundle-id": "com.deepseek.chat",
+        "x-client-locale": "zh_CN",
+        "x-client-platform": "web",
+        "x-client-timezone-offset": "28800",
+        "x-client-version": "1.0.0",
+    }
+
+
 def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
     if not config.api_key:
         return _model_connection_result(config, "not_configured", "模型API Key未配置")
@@ -134,7 +187,7 @@ def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:
         return _model_connection_result(config, "not_configured", "测试模型未配置")
 
     base_url = config.base_url
-    if config.source_type == "deepseek_balance":
+    if config.source_type in {"deepseek_balance", "deepseek_platform"}:
         base_url = base_url or "https://api.deepseek.com"
     if not base_url:
         return _model_connection_result(config, "not_configured", "模型Base URL未配置")
@@ -228,6 +281,23 @@ def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[st
         except Exception as exc:
             last_error = _sanitize_newapi_error(str(exc), headers)
     return {"_error": last_error or "New API request failed"}
+
+
+def _collect_deepseek_platform_payload(client: httpx.Client, url: str, headers: dict[str, str]) -> dict:
+    try:
+        response = client.get(url, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            if code not in (None, 0, True):
+                raise RuntimeError(str(payload.get("msg") or payload.get("message") or "DeepSeek platform request failed"))
+            data = payload.get("data")
+            if isinstance(data, dict) and data.get("biz_code") not in (None, 0, True):
+                raise RuntimeError(str(data.get("biz_msg") or "DeepSeek platform request failed"))
+        return payload
+    except Exception as exc:
+        return {"_error": _sanitize_newapi_error(str(exc), headers)}
 
 
 def _sanitize_newapi_error(message: str, headers: dict[str, str]) -> str:

@@ -544,6 +544,69 @@ def test_llm_usage_summary_marks_deepseek_balance_as_usage_unavailable(monkeypat
     assert models["usage_supported"] is False
 
 
+def test_llm_usage_summary_treats_deepseek_platform_as_full_usage(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "deepseek-codex",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "display_name": "codex",
+                "source_type": "deepseek_platform",
+            }
+        ],
+    )
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="deepseek-codex",
+            display_name="codex",
+            source_type="deepseek_platform",
+            status="online",
+            last_checked_at=now,
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                request_count=3,
+                token_count=22,
+                quota_used=0.000033,
+                estimated_amount=0.000033,
+                model_stats=[
+                    {
+                        "model": "deepseek-v4-flash",
+                        "request_count": 3,
+                        "token_count": 22,
+                        "amount": 0.000033,
+                        "estimated_cost_usd": 0.000033,
+                        "pricing_basis": "deepseek_platform_cny",
+                    }
+                ],
+                raw_summary={"deepseek_platform": {"currency": "CNY"}},
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=24h&source=provider:deepseek").json()
+    series = client.get("/api/llm/usage/series?range=24h&source=provider:deepseek").json()
+    models = client.get("/api/llm/usage/models?range=24h&source=provider:deepseek").json()
+
+    assert summary["usage_supported"] is True
+    assert summary["usage_scope"] == "full"
+    assert summary["request_count"] == 3
+    assert summary["estimated_cost_usd"] == 0.000033
+    assert series["series"][0]["source_type"] == "deepseek_platform"
+    assert series["model_series"][0]["points"][0]["pricing_basis"] == "deepseek_platform_cny"
+    assert models["models"][0]["pricing_basis"] == "deepseek_platform_cny"
+
+
 def test_llm_usage_summary_marks_mixed_sources_as_partial_usage(monkeypatch):
     monkeypatch.setattr(
         routes,

@@ -418,6 +418,11 @@ def llm_usage_series(
                 token_count=model_item.get("token_count") or None,
                 raw_quota=model_item.get("amount") or None,
             )
+            if model_item.get("pricing_basis") == "deepseek_platform_cny":
+                estimate = {
+                    "estimated_cost_usd": model_item.get("estimated_cost_usd") or model_item.get("amount") or 0,
+                    "pricing_basis": "deepseek_platform_cny",
+                }
             model_series["points"].append(
                 {
                     "timestamp": _iso(row.collected_at),
@@ -470,15 +475,21 @@ def llm_usage_models(
             total["input_tokens"] += item.get("input_tokens") or 0
             total["output_tokens"] += item.get("output_tokens") or 0
             total["amount"] += item.get("amount") or 0
+            if item.get("pricing_basis") == "deepseek_platform_cny":
+                total["estimated_cost_usd"] += item.get("estimated_cost_usd") or item.get("amount") or 0
+                total["pricing_basis"] = "deepseek_platform_cny"
     for total in totals.values():
-        estimate = estimate_model_cost_usd(
-            total["model"],
-            input_tokens=total["input_tokens"] or None,
-            output_tokens=total["output_tokens"] or None,
-            token_count=total["token_count"] or None,
-            raw_quota=total["amount"] or None,
-        )
-        total.update(estimate)
+        if total.get("pricing_basis") == "deepseek_platform_cny":
+            total["estimated_cost_usd"] = round(total["estimated_cost_usd"] or total["amount"], 6)
+        else:
+            estimate = estimate_model_cost_usd(
+                total["model"],
+                input_tokens=total["input_tokens"] or None,
+                output_tokens=total["output_tokens"] or None,
+                token_count=total["token_count"] or None,
+                raw_quota=total["amount"] or None,
+            )
+            total.update(estimate)
     return {
         "range": range,
         "models": sorted(totals.values(), key=lambda item: item.get("estimated_cost_usd") or item["amount"], reverse=True),
@@ -773,6 +784,8 @@ def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = Non
 
 
 def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
+    if (snapshot.raw_summary or {}).get("deepseek_platform"):
+        return snapshot.estimated_amount
     model_cost = estimate_snapshot_cost_usd(
         model_stats=snapshot.model_stats or [],
         token_count=snapshot.token_count,

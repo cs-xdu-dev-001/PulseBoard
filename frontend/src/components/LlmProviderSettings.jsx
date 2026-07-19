@@ -314,6 +314,7 @@ export function LlmProviderSettings() {
                     <span>接入类型</span>
                     <select value={editor.source_type} onChange={(event) => handleSourceTypeChange(event.target.value)}>
                       <option value="deepseek_balance">DeepSeek官方余额</option>
+                      <option value="deepseek_platform">DeepSeek平台统计</option>
                       <option value="newapi_admin">New API管理统计</option>
                       <option value="openai_gateway">OpenAI兼容监控网关</option>
                     </select>
@@ -342,6 +343,17 @@ export function LlmProviderSettings() {
                         </>
                       )}
                     </>
+                  )}
+                  {editor.source_type === 'deepseek_platform' && (
+                    <label className="llm-secret-field">
+                      <span>平台统计令牌</span>
+                      <input
+                        type="password"
+                        value={editor.access_token}
+                        onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
+                        placeholder={editor.mode === 'edit-provider' ? '留空则保留原令牌' : 'DeepSeek平台Bearer Token'}
+                      />
+                    </label>
                   )}
                   <label>
                     <span>模型请求方式</span>
@@ -379,7 +391,7 @@ export function LlmProviderSettings() {
                     <span>保存ID</span>
                     <input className="source-id-input" value={sourceIdPreview} readOnly />
                   </label>
-                  {editor.source_type === 'deepseek_balance' ? (
+                  {editor.source_type === 'deepseek_balance' || editor.source_type === 'deepseek_platform' ? (
                     <label className="llm-secret-field">
                       <span>API Key</span>
                       <input
@@ -438,9 +450,9 @@ export function LlmProviderSettings() {
           const expanded = Boolean(expandedProviders[group.provider_id])
           const unconfiguredCount = group.items.filter((item) => !credentialState(item).complete).length
           const providerMeta = providerMetadata(group)
-          const providerTokenMissing = providerMeta.source_type === 'newapi_admin' && !providerMeta.has_access_token
+          const providerTokenMissing = providerUsesProviderToken(providerMeta.source_type) && !providerMeta.has_access_token
           const credentialSummary = providerTokenMissing
-            ? '余额令牌未填'
+            ? providerMeta.source_type === 'deepseek_platform' ? '平台令牌未填' : '余额令牌未填'
             : unconfiguredCount
               ? `${unconfiguredCount}个Key凭据不完整`
               : '凭据已填写'
@@ -569,7 +581,7 @@ function keyPayload(editor, providerId, keyId, sourceId) {
     source_type: editor.source_type,
     base_url: providerUsesBaseUrl(editor.source_type) ? editor.base_url.trim() : '',
     api_key: editor.api_key.trim(),
-    access_token: editor.source_type === 'newapi_admin' || editor.source_type === 'openai_gateway' ? editor.access_token.trim() : '',
+    access_token: editor.source_type === 'deepseek_platform' || editor.source_type === 'newapi_admin' || editor.source_type === 'openai_gateway' ? editor.access_token.trim() : '',
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
     request_mode: editor.request_mode,
     test_model: editor.test_model.trim(),
@@ -584,7 +596,7 @@ function providerPayload(editor) {
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
     request_mode: editor.request_mode,
     test_model: editor.test_model.trim(),
-    access_token: editor.source_type === 'newapi_admin' ? editor.access_token.trim() : '',
+    access_token: providerUsesProviderToken(editor.source_type) ? editor.access_token.trim() : '',
   }
 }
 
@@ -618,6 +630,7 @@ function keyIdFromSource(sourceId, providerId) {
 function sourceTypeText(sourceType) {
   if (sourceType === 'newapi_admin') return 'New API'
   if (sourceType === 'openai_gateway') return '监控网关'
+  if (sourceType === 'deepseek_platform') return 'DeepSeek平台'
   return 'DeepSeek'
 }
 
@@ -627,6 +640,7 @@ function providerMetadata(group) {
 
 function providerEndpointText(item) {
   if (item.source_type === 'openai_gateway') return item.base_url || '未配置上游接口'
+  if (item.source_type === 'deepseek_platform') return 'platform.deepseek.com'
   return item.source_type === 'newapi_admin' ? item.base_url || '未配置接口' : '官方接口'
 }
 
@@ -651,6 +665,17 @@ function providerConfigItems(item) {
       { label: 'User ID', value: item.user_id || '1' },
       { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
       { label: '测试模型', value: item.test_model || '未配置', warning: !item.test_model },
+    ]
+  }
+  if (item.source_type === 'deepseek_platform') {
+    return [
+      { label: '接入类型', value: sourceTypeText(item.source_type) },
+      { label: '平台统计', value: 'https://platform.deepseek.com/api/v0/usage/by_api_key/*' },
+      { label: '平台令牌', value: item.has_access_token ? '已填写' : '未填写', warning: !item.has_access_token },
+      { label: '余额接口', value: deepseekBalanceEndpointText() },
+      { label: '模型接口', value: modelEndpointText(item) },
+      { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
+      { label: '测试模型', value: item.test_model || defaultTestModel(item.source_type) || '未配置', warning: !item.test_model },
     ]
   }
   return [
@@ -726,11 +751,11 @@ function ConnectionResult({ label, result, testing }) {
 }
 
 function defaultRequestMode(sourceType) {
-  return sourceType === 'deepseek_balance' || sourceType === 'openai_gateway' ? 'chat_completions' : 'responses'
+  return sourceType === 'deepseek_balance' || sourceType === 'deepseek_platform' || sourceType === 'openai_gateway' ? 'chat_completions' : 'responses'
 }
 
 function defaultTestModel(sourceType) {
-  return sourceType === 'deepseek_balance' || sourceType === 'openai_gateway' ? 'deepseek-chat' : ''
+  return sourceType === 'deepseek_balance' || sourceType === 'deepseek_platform' || sourceType === 'openai_gateway' ? 'deepseek-chat' : ''
 }
 
 function requestModeText(requestMode) {
@@ -752,7 +777,7 @@ function modelEndpointText(item) {
 }
 
 function modelBaseUrl(item) {
-  if (item.source_type === 'deepseek_balance') {
+  if (item.source_type === 'deepseek_balance' || item.source_type === 'deepseek_platform') {
     const deepseekBase = String(item.base_url || 'https://api.deepseek.com').trim().replace(/\/+$/, '')
     return deepseekBase.endsWith('/v1') ? deepseekBase : `${deepseekBase}/v1`
   }
@@ -763,6 +788,10 @@ function modelBaseUrl(item) {
 
 function providerUsesBaseUrl(sourceType) {
   return sourceType === 'newapi_admin' || sourceType === 'openai_gateway'
+}
+
+function providerUsesProviderToken(sourceType) {
+  return sourceType === 'deepseek_platform' || sourceType === 'newapi_admin'
 }
 
 function normalizedNewApiBase(baseUrl) {

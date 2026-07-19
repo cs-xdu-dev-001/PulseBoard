@@ -12,11 +12,12 @@ from app.llm_usage import (
     list_llm_usage_config,
     load_llm_usage_configs,
     normalize_deepseek_balance,
+    normalize_deepseek_platform,
     normalize_newapi,
     save_llm_usage_config,
     update_llm_provider_config,
 )
-from app.llm_usage_collector import check_model_connection, collect_newapi
+from app.llm_usage_collector import check_model_connection, collect_deepseek_platform, collect_newapi
 from app.llm_pricing import estimate_model_cost_usd
 
 
@@ -71,6 +72,166 @@ def test_normalize_deepseek_balance_extracts_balance():
     assert result.balance_total == 12.34
     assert result.balance_granted == 2.0
     assert result.balance_topped_up == 10.34
+
+
+def test_normalize_deepseek_platform_extracts_key_model_and_daily_usage():
+    config = LlmUsageConfig(
+        "deepseek-codex",
+        "codex",
+        "deepseek_platform",
+        api_key="sk-demo-secret-main",
+        access_token="platform-token",
+    )
+    amount = {
+        "code": 0,
+        "data": {
+            "biz_data": {
+                "series": [
+                    {
+                        "api_key": {
+                            "tracking_id": "3c60c813",
+                            "name": "codex",
+                            "sensitive_id": "sk-demo***********************main",
+                            "valid": True,
+                        },
+                        "model": "deepseek-v4-flash",
+                        "buckets": [
+                            {
+                                "time": 1784246400,
+                                "usage": {
+                                    "RESPONSE_TOKEN": 1,
+                                    "REQUEST": 1,
+                                    "PROMPT_CACHE_HIT_TOKEN": 0,
+                                    "PROMPT_CACHE_MISS_TOKEN": 9,
+                                },
+                            },
+                            {
+                                "time": 1784332800,
+                                "usage": {
+                                    "RESPONSE_TOKEN": 2,
+                                    "REQUEST": 2,
+                                    "PROMPT_CACHE_HIT_TOKEN": 4,
+                                    "PROMPT_CACHE_MISS_TOKEN": 6,
+                                },
+                            },
+                        ],
+                    },
+                    {
+                        "api_key": {
+                            "tracking_id": "other",
+                            "name": "other",
+                            "sensitive_id": "sk-other***********************0000",
+                            "valid": True,
+                        },
+                        "model": "deepseek-v4-flash",
+                        "buckets": [{"time": 1784332800, "usage": {"REQUEST": 100}}],
+                    },
+                ]
+            }
+        },
+    }
+    cost = {
+        "code": 0,
+        "data": {
+            "biz_data": {
+                "data": [
+                    {
+                        "currency": "CNY",
+                        "series": [
+                            {
+                                "api_key": {
+                                    "tracking_id": "3c60c813",
+                                    "name": "codex",
+                                    "sensitive_id": "sk-demo***********************main",
+                                    "valid": True,
+                                },
+                                "model": "deepseek-v4-flash",
+                                "buckets": [
+                                    {"time": 1784246400, "cost": "0.000011"},
+                                    {"time": 1784332800, "cost": "0.000022"},
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+    }
+
+    result = normalize_deepseek_platform(config, {"amount": amount, "cost": cost})
+
+    assert result.status == "online"
+    assert result.balance_currency == "CNY"
+    assert result.request_count == 3
+    assert result.token_count == 22
+    assert result.quota_used == 0.000033
+    assert result.estimated_amount == 0.000033
+    assert result.model_stats == [
+        {
+            "model": "deepseek-v4-flash",
+            "request_count": 3,
+            "token_count": 22,
+            "input_tokens": 19,
+            "output_tokens": 3,
+            "cache_hit_input_tokens": 4,
+            "cache_miss_input_tokens": 15,
+            "amount": 0.000033,
+            "estimated_cost_usd": 0.000033,
+            "pricing_basis": "deepseek_platform_cny",
+        }
+    ]
+    assert len(result.raw_summary["deepseek_platform"]["daily"]) == 2
+
+
+def test_collect_deepseek_platform_calls_official_usage_endpoints(monkeypatch):
+    requested = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "by_api_key/amount" in self.url:
+                return {"code": 0, "data": {"biz_data": {"series": []}}}
+            if "by_api_key/cost" in self.url:
+                return {"code": 0, "data": {"biz_data": {"data": [{"currency": "CNY", "series": []}]}}}
+            return {"is_available": True, "balance_infos": [{"currency": "CNY", "total_balance": "12.8"}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested.append((url, dict(headers)))
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_deepseek_platform(
+        LlmUsageConfig(
+            "deepseek-main",
+            "DeepSeek",
+            "deepseek_platform",
+            api_key="sk-main",
+            access_token="platform-token",
+        )
+    )
+
+    assert any("/api/v0/usage/by_api_key/amount" in url for url, _headers in requested)
+    assert any("/api/v0/usage/by_api_key/cost" in url for url, _headers in requested)
+    assert requested[0][1]["Authorization"] == "Bearer platform-token"
+    assert requested[0][1]["x-client-platform"] == "web"
+    assert result.status == "online"
+    assert result.balance_total == 12.8
 
 
 def test_normalize_newapi_tolerates_partial_payloads():
@@ -831,6 +992,74 @@ def test_save_openai_gateway_config_writes_upstream_key_and_gateway_token(tmp_pa
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_BASE_URL=https://api.deepseek.com" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=upstream-secret" in text
     assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_ACCESS_TOKEN=gateway-token" in text
+
+
+def test_save_deepseek_platform_config_writes_platform_token_and_model_key(tmp_path):
+    env_path = tmp_path / "test.env"
+
+    save_llm_usage_config(
+        {
+            "source_id": "deepseek-main",
+            "source_type": "deepseek_platform",
+            "provider_id": "deepseek",
+            "provider_name": "DeepSeek",
+            "display_name": "codex",
+            "request_mode": "chat_completions",
+            "test_model": "deepseek-chat",
+            "api_key": "sk-model-secret",
+            "access_token": "platform-token",
+        },
+        env_path=env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    config = load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path)[0]
+    assert config.source_type == "deepseek_platform"
+    assert config.api_key == "sk-model-secret"
+    assert config.access_token == "platform-token"
+    assert config.base_url is None
+    assert config.request_mode == "chat_completions"
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_platform" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=sk-model-secret" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_ACCESS_TOKEN=platform-token" in text
+
+
+def test_deepseek_platform_key_inherits_provider_platform_token(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_platform",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_ACCESS_TOKEN=platform-token",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_REQUEST_MODE=chat_completions",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TEST_MODEL=deepseek-chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    save_llm_usage_config(
+        {
+            "source_id": "deepseek-codex",
+            "provider_id": "deepseek",
+            "provider_name": "被忽略",
+            "display_name": "codex",
+            "source_type": "deepseek_balance",
+            "api_key": "sk-codex",
+        },
+        env_path=env_path,
+    )
+
+    added = next(config for config in load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path) if config.source_id == "deepseek-codex")
+    text = env_path.read_text(encoding="utf-8")
+    assert added.source_type == "deepseek_platform"
+    assert added.access_token == "platform-token"
+    assert added.api_key == "sk-codex"
+    assert "PULSEBOARD_LLM_DEEPSEEK_CODEX_ACCESS_TOKEN=platform-token" in text
 
 
 def test_save_openai_gateway_config_requires_new_key_gateway_token(tmp_path):

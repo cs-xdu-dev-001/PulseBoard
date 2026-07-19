@@ -225,6 +225,72 @@ describe('Settings LLM供应商配置', () => {
     })
   })
 
+  it('新增DeepSeek平台统计时平台Token在供应商配置里，Key只填模型Key', async () => {
+    render(<SettingsView />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '新增供应商' }))
+    fireEvent.change(screen.getByLabelText('供应商ID'), { target: { value: 'deepseek-official' } })
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'DeepSeek' } })
+    fireEvent.change(screen.getByLabelText('接入类型'), { target: { value: 'deepseek_platform' } })
+
+    expect(screen.getByLabelText('平台统计令牌')).toHaveValue('')
+    expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('网关访问令牌')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('API Key')).toHaveValue('')
+
+    fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: 'codex' } })
+    fireEvent.change(screen.getByLabelText('平台统计令牌'), { target: { value: 'platform-token' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-codex' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    await waitFor(() => {
+      expect(saveLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+        provider_id: 'deepseek-official',
+        provider_name: 'DeepSeek',
+        source_id: 'deepseek-official-main',
+        display_name: 'codex',
+        source_type: 'deepseek_platform',
+        api_key: 'sk-codex',
+        access_token: 'platform-token',
+        base_url: '',
+        request_mode: 'chat_completions',
+        test_model: 'deepseek-chat',
+      }))
+    })
+  })
+
+  it('编辑DeepSeek平台统计供应商时可以更新共享平台Token', async () => {
+    fetchLlmConfig.mockResolvedValueOnce({
+      sources: [
+        {
+          ...llmSources[0],
+          source_type: 'deepseek_platform',
+          has_access_token: true,
+        },
+      ],
+    })
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek')
+    fireEvent.click(within(provider).getByRole('button', { name: '编辑供应商' }))
+
+    expect(screen.getByLabelText('接入类型')).toHaveValue('deepseek_platform')
+    expect(screen.getByLabelText('平台统计令牌')).toHaveValue('')
+    expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('平台统计令牌'), { target: { value: 'new-platform-token' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存供应商' }))
+
+    await waitFor(() => {
+      expect(updateLlmProvider).toHaveBeenCalledWith('deepseek', expect.objectContaining({
+        source_type: 'deepseek_platform',
+        access_token: 'new-platform-token',
+        base_url: '',
+        user_id: '',
+      }))
+    })
+  })
+
   it('可以测试单个Key并在对应行显示在线状态', async () => {
     render(<SettingsView />)
 

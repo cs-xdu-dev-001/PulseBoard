@@ -13,6 +13,7 @@ from app.config import ROOT_DIR, Settings
 from app.llm_pricing import NEWAPI_QUOTA_PER_USD, estimate_model_cost_usd, estimate_snapshot_cost_usd
 
 _ENV_UPDATE_LOCK = RLock()
+USAGE_SOURCE_TYPES = {"deepseek_balance", "deepseek_platform", "newapi_admin", "openai_gateway"}
 
 
 def _serialized_env_update(function):
@@ -93,11 +94,11 @@ def load_llm_usage_configs(settings: Settings, env_path: Path | None = None) -> 
                 user_id=(env.get(prefix + "USER_ID") or "1").strip() or "1",
                 request_mode=(
                     env.get(prefix + "REQUEST_MODE")
-                    or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+                    or ("chat_completions" if source_type in {"deepseek_balance", "deepseek_platform"} else "responses")
                 ).strip(),
                 test_model=(
                     env.get(prefix + "TEST_MODEL")
-                    or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+                    or ("deepseek-chat" if source_type in {"deepseek_balance", "deepseek_platform"} else "")
                 ).strip()
                 or None,
             )
@@ -131,8 +132,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", source_id):
         raise ValueError("source_id must use lowercase letters, numbers, '-' or '_'")
     source_type = str(values.get("source_type") or "").strip()
-    if source_type not in {"deepseek_balance", "newapi_admin", "openai_gateway"}:
-        raise ValueError("source_type must be deepseek_balance, newapi_admin or openai_gateway")
+    if source_type not in USAGE_SOURCE_TYPES:
+        raise ValueError("source_type must be deepseek_balance, deepseek_platform, newapi_admin or openai_gateway")
     provider_id = str(values.get("provider_id") or source_id).strip()
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", provider_id):
         raise ValueError("provider_id must use lowercase letters, numbers, '-' or '_'")
@@ -141,11 +142,11 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     user_id = str(values.get("user_id") or "1").strip() or "1"
     request_mode = str(
         values.get("request_mode")
-        or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+        or ("chat_completions" if source_type in {"deepseek_balance", "deepseek_platform"} else "responses")
     ).strip()
     test_model = str(
         values.get("test_model")
-        or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+        or ("deepseek-chat" if source_type in {"deepseek_balance", "deepseek_platform"} else "")
     ).strip()
 
     env = _merged_env(env_path)
@@ -162,17 +163,19 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
         user_id = shared["user_id"] if shared["has_user_id"] else user_id
         request_mode = shared["request_mode"] if shared["has_request_mode"] else str(
             values.get("request_mode")
-            or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+            or ("chat_completions" if source_type in {"deepseek_balance", "deepseek_platform"} else "responses")
         ).strip()
         test_model = shared["test_model"] if shared["has_test_model"] else str(
             values.get("test_model")
-            or ("deepseek-chat" if source_type == "deepseek_balance" else "")
+            or ("deepseek-chat" if source_type in {"deepseek_balance", "deepseek_platform"} else "")
         ).strip()
-    elif source_type == "deepseek_balance":
+    elif source_type in {"deepseek_balance", "deepseek_platform"}:
         base_url = ""
         user_id = "1"
     if source_type == "openai_gateway" and not access_token and not source_exists:
         raise ValueError("gateway access token is required for a new gateway key")
+    if source_type == "deepseek_platform" and not access_token and not source_exists and not shared:
+        raise ValueError("DeepSeek platform token is required for platform usage statistics")
     if request_mode not in {"responses", "chat_completions"}:
         raise ValueError("request_mode must be responses or chat_completions")
     for existing_source_id in sources:
@@ -194,7 +197,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     }
     if values.get("api_key"):
         updates[prefix + "API_KEY"] = str(values["api_key"]).strip()
-    if source_type in {"newapi_admin", "openai_gateway"} and access_token:
+    if source_type in {"deepseek_platform", "newapi_admin", "openai_gateway"} and access_token:
         updates[prefix + "ACCESS_TOKEN"] = access_token
 
     if shared:
@@ -213,7 +216,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
                     existing_prefix + "TEST_MODEL": test_model,
                 }
             )
-            if source_type == "newapi_admin" and access_token:
+            if source_type in {"deepseek_platform", "newapi_admin"} and access_token:
                 updates[existing_prefix + "ACCESS_TOKEN"] = access_token
 
     _write_env(env_path, updates)
@@ -264,8 +267,8 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
     env = _merged_env(env_path)
     existing = _provider_shared_values(env, source_ids, provider_id)
     source_type = str(values.get("source_type") or "").strip()
-    if source_type not in {"deepseek_balance", "newapi_admin", "openai_gateway"}:
-        raise ValueError("source_type must be deepseek_balance, newapi_admin or openai_gateway")
+    if source_type not in USAGE_SOURCE_TYPES:
+        raise ValueError("source_type must be deepseek_balance, deepseek_platform, newapi_admin or openai_gateway")
     provider_name = str(values.get("provider_name") or provider_id).strip()
     base_url = str(values.get("base_url") or "").strip()
     user_id = str(values.get("user_id") or "1").strip() or "1"
@@ -274,7 +277,7 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
     request_mode = str(request_mode_value).strip() if request_mode_value is not None else (
         existing["request_mode"]
         if same_source_type
-        else ("chat_completions" if source_type == "deepseek_balance" else "responses")
+        else ("chat_completions" if source_type in {"deepseek_balance", "deepseek_platform"} else "responses")
     )
     if request_mode not in {"responses", "chat_completions"}:
         raise ValueError("request_mode must be responses or chat_completions")
@@ -282,7 +285,7 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
     test_model = str(test_model_value).strip() if test_model_value is not None else (
         existing["test_model"]
         if same_source_type
-        else ("deepseek-chat" if source_type == "deepseek_balance" else "")
+        else ("deepseek-chat" if source_type in {"deepseek_balance", "deepseek_platform"} else "")
     )
     access_token = str(values.get("access_token") or "").strip()
 
@@ -302,6 +305,10 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
         if source_type in {"newapi_admin", "openai_gateway"}:
             updates[prefix + "BASE_URL"] = base_url
             updates[prefix + "USER_ID"] = user_id
+            if access_token:
+                updates[prefix + "ACCESS_TOKEN"] = access_token
+        elif source_type == "deepseek_platform":
+            deletes.update({prefix + "BASE_URL", prefix + "USER_ID"})
             if access_token:
                 updates[prefix + "ACCESS_TOKEN"] = access_token
         else:
@@ -340,6 +347,135 @@ def normalize_deepseek_balance(config: LlmUsageConfig, payload: dict[str, Any]) 
         quota_used=None,
         quota_remaining=total,
         raw_summary={"deepseek": _safe_summary(payload)},
+    )
+
+
+def normalize_deepseek_platform(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsageResult:
+    amount_payload = payloads.get("amount") or {}
+    cost_payload = payloads.get("cost") or {}
+    balance_payload = payloads.get("balance") or {}
+    errors = [
+        str(value.get("_error"))
+        for value in payloads.values()
+        if isinstance(value, dict) and value.get("_error")
+    ]
+    amount_series = _deepseek_platform_amount_series(amount_payload)
+    cost_series, currency = _deepseek_platform_cost_series(cost_payload)
+    cost_by_key: dict[tuple[str, str, int], float] = {}
+    for item in cost_series:
+        api_key = item.get("api_key") if isinstance(item, dict) else None
+        model = str(item.get("model") or "unknown")
+        tracking_id = _deepseek_api_tracking_id(api_key)
+        if not _deepseek_api_key_matches(config.api_key, api_key):
+            continue
+        for bucket in item.get("buckets") or []:
+            if not isinstance(bucket, dict):
+                continue
+            timestamp = int(_to_float(bucket.get("time")) or 0)
+            if not timestamp:
+                continue
+            cost_by_key[(tracking_id, model, timestamp)] = _round_number(bucket.get("cost") or 0)
+
+    model_totals: dict[str, dict[str, Any]] = {}
+    daily_totals: dict[int, dict[str, Any]] = {}
+    matched_key: dict[str, Any] | None = None
+    for item in amount_series:
+        if not isinstance(item, dict):
+            continue
+        api_key = item.get("api_key")
+        if not _deepseek_api_key_matches(config.api_key, api_key):
+            continue
+        matched_key = matched_key or _deepseek_api_summary(api_key)
+        model = str(item.get("model") or "unknown")
+        tracking_id = _deepseek_api_tracking_id(api_key)
+        model_total = model_totals.setdefault(
+            model,
+            {
+                "model": model,
+                "request_count": 0,
+                "token_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_hit_input_tokens": 0,
+                "cache_miss_input_tokens": 0,
+                "amount": 0,
+                "estimated_cost_usd": 0,
+                "pricing_basis": "deepseek_platform_cny",
+            },
+        )
+        for bucket in item.get("buckets") or []:
+            if not isinstance(bucket, dict):
+                continue
+            timestamp = int(_to_float(bucket.get("time")) or 0)
+            if not timestamp:
+                continue
+            usage = bucket.get("usage") if isinstance(bucket.get("usage"), dict) else {}
+            request_count = _to_float(usage.get("REQUEST")) or 0
+            output_tokens = _to_float(usage.get("RESPONSE_TOKEN")) or 0
+            cache_hit_tokens = _to_float(usage.get("PROMPT_CACHE_HIT_TOKEN")) or 0
+            cache_miss_tokens = _to_float(usage.get("PROMPT_CACHE_MISS_TOKEN")) or 0
+            input_tokens = cache_hit_tokens + cache_miss_tokens
+            token_count = input_tokens + output_tokens
+            cost = cost_by_key.get((tracking_id, model, timestamp), 0)
+            model_total["request_count"] += request_count
+            model_total["token_count"] += token_count
+            model_total["input_tokens"] += input_tokens
+            model_total["output_tokens"] += output_tokens
+            model_total["cache_hit_input_tokens"] += cache_hit_tokens
+            model_total["cache_miss_input_tokens"] += cache_miss_tokens
+            model_total["amount"] += cost
+            model_total["estimated_cost_usd"] += cost
+            daily = daily_totals.setdefault(
+                timestamp,
+                {
+                    "time": timestamp,
+                    "request_count": 0,
+                    "token_count": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "amount": 0,
+                },
+            )
+            daily["request_count"] += request_count
+            daily["token_count"] += token_count
+            daily["input_tokens"] += input_tokens
+            daily["output_tokens"] += output_tokens
+            daily["amount"] += cost
+
+    model_stats = sorted(
+        [_rounded_deepseek_platform_model(item) for item in model_totals.values()],
+        key=lambda item: item["amount"],
+        reverse=True,
+    )
+    daily = [_rounded_deepseek_platform_daily(item) for _time, item in sorted(daily_totals.items())]
+    balance = normalize_deepseek_balance(config, balance_payload) if isinstance(balance_payload, dict) and balance_payload else None
+    request_count = _round_number(sum(item["request_count"] for item in model_stats))
+    token_count = _round_number(sum(item["token_count"] for item in model_stats))
+    total_cost = _round_number(sum(item["amount"] for item in model_stats))
+    return LlmUsageResult(
+        source_id=config.source_id,
+        display_name=config.display_name,
+        source_type=config.source_type,
+        status="offline" if errors and not amount_series and not cost_series else "degraded" if errors else "online",
+        balance_currency=(balance.balance_currency if balance else currency) or currency,
+        balance_total=balance.balance_total if balance else None,
+        balance_granted=balance.balance_granted if balance else None,
+        balance_topped_up=balance.balance_topped_up if balance else None,
+        quota_used=total_cost,
+        quota_remaining=balance.balance_total if balance else None,
+        request_count=request_count,
+        token_count=token_count,
+        estimated_amount=total_cost,
+        model_stats=model_stats,
+        raw_summary={
+            "deepseek_platform": {
+                "currency": currency,
+                "api_key": matched_key,
+                "daily": daily,
+                "pricing_basis": "deepseek_platform_cny",
+            }
+        },
+        error=errors[0] if errors else None,
     )
 
 
@@ -523,13 +659,13 @@ def _provider_shared_values(env: dict[str, str], source_ids: list[str], provider
             "has_user_id": prefix + "USER_ID" in env,
             "request_mode": (
                 env.get(prefix + "REQUEST_MODE")
-                or ("chat_completions" if source_type == "deepseek_balance" else "responses")
+                or ("chat_completions" if source_type in {"deepseek_balance", "deepseek_platform"} else "responses")
             ).strip(),
             "has_request_mode": prefix + "REQUEST_MODE" in env,
             "test_model": (
                 env.get(prefix + "TEST_MODEL")
                 if prefix + "TEST_MODEL" in env
-                else ("deepseek-chat" if source_type == "deepseek_balance" else "")
+                else ("deepseek-chat" if source_type in {"deepseek_balance", "deepseek_platform"} else "")
             ).strip(),
             "has_test_model": prefix + "TEST_MODEL" in env,
         }
@@ -673,6 +809,100 @@ def _model_rows(value: Any) -> list[dict[str, Any]]:
             rows.append(value)
         return rows
     return []
+
+
+def _deepseek_platform_amount_series(payload: Any) -> list[dict[str, Any]]:
+    biz_data = _deepseek_platform_biz_data(payload)
+    series = biz_data.get("series") if isinstance(biz_data, dict) else None
+    return series if isinstance(series, list) else []
+
+
+def _deepseek_platform_cost_series(payload: Any) -> tuple[list[dict[str, Any]], str | None]:
+    biz_data = _deepseek_platform_biz_data(payload)
+    if not isinstance(biz_data, dict):
+        return [], None
+    series = biz_data.get("series")
+    if isinstance(series, list):
+        return series, None
+    data = biz_data.get("data")
+    if not isinstance(data, list):
+        return [], None
+    result: list[dict[str, Any]] = []
+    currency = None
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        currency = currency or item.get("currency")
+        child_series = item.get("series")
+        if isinstance(child_series, list):
+            result.extend(child for child in child_series if isinstance(child, dict))
+    return result, str(currency) if currency else None
+
+
+def _deepseek_platform_biz_data(payload: Any) -> dict[str, Any]:
+    value = payload
+    if isinstance(value, dict) and "data" in value:
+        value = value["data"]
+    if isinstance(value, dict) and "biz_data" in value:
+        value = value["biz_data"]
+    return value if isinstance(value, dict) else {}
+
+
+def _deepseek_api_tracking_id(api_key: Any) -> str:
+    if isinstance(api_key, dict):
+        return str(api_key.get("tracking_id") or api_key.get("sensitive_id") or api_key.get("name") or "unknown")
+    return "unknown"
+
+
+def _deepseek_api_key_matches(config_key: str | None, api_key: Any) -> bool:
+    if not config_key or not isinstance(api_key, dict):
+        return True
+    sensitive_id = str(api_key.get("sensitive_id") or "")
+    if not sensitive_id:
+        return True
+    parts = [part for part in sensitive_id.split("*") if part]
+    return all(part in config_key for part in parts)
+
+
+def _deepseek_api_summary(api_key: Any) -> dict[str, Any] | None:
+    if not isinstance(api_key, dict):
+        return None
+    return {
+        "tracking_id": api_key.get("tracking_id"),
+        "name": api_key.get("name"),
+        "sensitive_id": api_key.get("sensitive_id"),
+        "valid": api_key.get("valid"),
+    }
+
+
+def _rounded_deepseek_platform_model(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **item,
+        "request_count": _round_number(item["request_count"]),
+        "token_count": _round_number(item["token_count"]),
+        "input_tokens": _round_number(item["input_tokens"]),
+        "output_tokens": _round_number(item["output_tokens"]),
+        "cache_hit_input_tokens": _round_number(item["cache_hit_input_tokens"]),
+        "cache_miss_input_tokens": _round_number(item["cache_miss_input_tokens"]),
+        "amount": _round_number(item["amount"]),
+        "estimated_cost_usd": _round_number(item["estimated_cost_usd"]),
+    }
+
+
+def _rounded_deepseek_platform_daily(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **item,
+        "request_count": _round_number(item["request_count"]),
+        "token_count": _round_number(item["token_count"]),
+        "input_tokens": _round_number(item["input_tokens"]),
+        "output_tokens": _round_number(item["output_tokens"]),
+        "amount": _round_number(item["amount"]),
+    }
+
+
+def _round_number(value: Any) -> float:
+    number = _to_float(value) or 0
+    return round(number, 6)
 
 
 def _channel_balance_total(value: Any) -> float | None:
