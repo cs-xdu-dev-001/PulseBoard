@@ -395,6 +395,8 @@ def test_llm_usage_summary_marks_deepseek_balance_as_usage_unavailable(monkeypat
     assert summary["usage_scope"] == "balance_only"
     assert summary["usage_message"] == "DeepSeek官方只提供余额，未提供请求、token、模型用量统计"
     assert series["usage_supported"] is False
+    assert series["series"] == []
+    assert series["model_series"] == []
     assert models["usage_supported"] is False
 
 
@@ -463,11 +465,13 @@ def test_llm_usage_summary_marks_mixed_sources_as_partial_usage(monkeypatch):
         db.commit()
 
     summary = client.get("/api/llm/usage/summary?range=24h").json()
+    series = client.get("/api/llm/usage/series?range=24h").json()
 
     assert summary["usage_supported"] is True
     assert summary["usage_scope"] == "partial"
     assert summary["request_count"] == 20
     assert summary["usage_message"] == "部分来源仅提供余额，未计入请求、token、模型用量统计"
+    assert [item["source_id"] for item in series["series"]] == ["academic-main"]
 
 
 def test_llm_usage_series_includes_model_area_series():

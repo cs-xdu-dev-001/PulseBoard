@@ -380,11 +380,14 @@ def llm_usage_series(
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
     for row, source_row in rows:
+        if source_row.source_type == "deepseek_balance":
+            continue
         item = series_by_source.setdefault(
             source_row.id,
             {
                 "source_id": source_row.source_id,
                 "display_name": source_row.display_name,
+                "source_type": source_row.source_type,
                 "points": [],
             },
         )

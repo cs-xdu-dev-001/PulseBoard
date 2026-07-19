@@ -195,6 +195,68 @@ it('DeepSeek官方余额来源不把缺失的用量统计显示成正常0', asyn
   expect(screen.queryByText('总计：0')).not.toBeInTheDocument()
 })
 
+it('部分统计视图中过滤仅余额来源的用量序列', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '中转Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+      },
+      {
+        source_id: 'deepseek-main',
+        provider_id: 'deepseek',
+        provider_name: 'DeepSeek',
+        display_name: 'DeepSeek主Key',
+        source_type: 'deepseek_balance',
+        status: 'online',
+        balance_currency: 'CNY',
+        balance_total: 67.98,
+      },
+    ],
+  })
+  fetchLlmSummary.mockResolvedValue({
+    usage_supported: true,
+    usage_scope: 'partial',
+    usage_message: '部分来源仅提供余额，未计入请求、token、模型用量统计',
+    estimated_cost_usd: 1.2,
+    request_count: 12,
+    token_count: 3000,
+    snapshot_count: 2,
+  })
+  fetchLlmSeries.mockResolvedValue({
+    usage_supported: true,
+    usage_scope: 'partial',
+    series: [
+      {
+        source_id: 'academic-main',
+        source_type: 'newapi_admin',
+        display_name: '中转Key',
+        points: [{ timestamp: new Date().toISOString(), request_count: 12, token_count: 3000 }],
+      },
+      {
+        source_id: 'deepseek-main',
+        source_type: 'deepseek_balance',
+        display_name: 'DeepSeek主Key',
+        points: [{ timestamp: new Date().toISOString(), request_count: 99, token_count: 99000 }],
+      },
+    ],
+    model_series: [],
+  })
+
+  render(<LlmUsageView />)
+
+  expect(await screen.findByText('部分统计')).toBeVisible()
+  const rankPanel = screen.getByText('Key调用排行').closest('.rank-panel')
+  expect(within(rankPanel).getByText('中转Key')).toBeVisible()
+  expect(within(rankPanel).queryByText('DeepSeek主Key')).not.toBeInTheDocument()
+  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：12次请求，Token：3.00K`))).toBeVisible()
+  expect(screen.queryByTitle(new RegExp(`${localDateKey(new Date())}：111次请求`))).not.toBeInTheDocument()
+})
+
 it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
   fetchLlmSources.mockResolvedValue({
     sources: [

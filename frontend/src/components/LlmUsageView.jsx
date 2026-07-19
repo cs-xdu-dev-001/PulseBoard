@@ -70,6 +70,8 @@ export function LlmUsageView({ theme = 'dark' }) {
   const usageUnavailable = summary?.usage_supported === false
   const usagePartial = summary?.usage_scope === 'partial'
   const usageMessage = summary?.usage_message || series?.usage_message || ''
+  const usageSeries = useMemo(() => filterUsageSeries(series?.series || []), [series])
+  const usageModelSeries = useMemo(() => filterUsageSeries(series?.model_series || []), [series])
   const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
 
   return (
@@ -140,7 +142,7 @@ export function LlmUsageView({ theme = 'dark' }) {
         mode={costChartMode}
         onModeChange={setCostChartMode}
         total={formatUsd(summary?.estimated_cost_usd)}
-        series={series?.model_series || []}
+        series={usageModelSeries}
         range={range}
         granularity={granularity}
         theme={theme}
@@ -148,15 +150,15 @@ export function LlmUsageView({ theme = 'dark' }) {
       />
 
       <div className="llm-insight-grid">
-        <ActivityHeatmap series={series?.series || []} usageUnavailable={usageUnavailable} />
-        <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(series?.series || [])} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
+        <ActivityHeatmap series={usageSeries} usageUnavailable={usageUnavailable} />
+        <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(usageSeries)} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
       </div>
 
       <ModelAnalysisPanel
         view={modelView}
         onViewChange={setModelView}
         models={models}
-        series={series?.model_series || []}
+        series={usageModelSeries}
         range={range}
         granularity={granularity}
         theme={theme}
@@ -795,6 +797,10 @@ function sourceRankItems(series) {
     }))
     .filter((item) => item.value > 0)
     .sort((a, b) => b.value - a.value)
+}
+
+function filterUsageSeries(series) {
+  return (series || []).filter((item) => item.source_type !== 'deepseek_balance')
 }
 
 function latestPointValue(points, key) {
