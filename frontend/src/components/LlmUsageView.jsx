@@ -921,7 +921,7 @@ function statusText(status) {
 }
 
 function basisText(value) {
-  return { openai_tokens: 'OpenAI参考价', newapi_quota: 'NewAPI官方', unknown: '未知' }[value] || value || '--'
+  return { openai_tokens: 'OpenAI参考价', deepseek_tokens: 'DeepSeek官方价', newapi_quota: 'NewAPI官方', unknown: '未知' }[value] || value || '--'
 }
 
 function formatPercentFromHundred(value) {

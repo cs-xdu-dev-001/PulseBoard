@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -103,6 +103,150 @@ def test_llm_usage_sources_do_not_expose_secrets(monkeypatch):
     assert payload["sources"][0]["display_name"] == "Academic Gateway"
     assert "access_token" not in payload["sources"][0]
     assert "api_key" not in payload["sources"][0]
+
+
+def test_llm_gateway_forwards_chat_completions_and_persists_usage(monkeypatch):
+    config = LlmUsageConfig(
+        source_id="deepseek-main",
+        provider_id="deepseek",
+        provider_name="DeepSeek",
+        display_name="主Key",
+        source_type="openai_gateway",
+        base_url="https://api.deepseek.com",
+        api_key="upstream-secret",
+        access_token="gateway-token",
+        request_mode="chat_completions",
+        test_model="deepseek-chat",
+    )
+    captured = {}
+
+    monkeypatch.setattr(routes, "load_llm_usage_configs", lambda _settings: [config])
+
+    def fake_post(url, *, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+
+        class Response:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+            text = '{"id":"chatcmpl-1"}'
+            content = b'{"id":"chatcmpl-1"}'
+
+            def json(self):
+                return {
+                    "id": "chatcmpl-1",
+                    "model": "deepseek-chat",
+                    "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "total_tokens": 18,
+                    },
+                }
+
+        return Response()
+
+    monkeypatch.setattr(routes.httpx, "post", fake_post)
+    client, session_factory = make_client()
+
+    response = client.post(
+        "/api/llm/gateway/deepseek-main/v1/chat/completions",
+        headers={"Authorization": "Bearer gateway-token"},
+        json={"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://api.deepseek.com/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer upstream-secret"
+    with session_factory() as db:
+        source = db.scalar(select(LlmUsageSource).where(LlmUsageSource.source_id == "deepseek-main"))
+        snapshot = db.scalar(select(LlmUsageSnapshot).where(LlmUsageSnapshot.source_id == source.id))
+        assert source.source_type == "openai_gateway"
+        assert snapshot.request_count == 1
+        assert snapshot.token_count == 18
+        assert snapshot.model_stats[0]["model"] == "deepseek-chat"
+        assert snapshot.model_stats[0]["input_tokens"] == 11
+        assert snapshot.model_stats[0]["output_tokens"] == 7
+
+
+def test_llm_gateway_rejects_invalid_token(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "load_llm_usage_configs",
+        lambda _settings: [
+            LlmUsageConfig(
+                source_id="deepseek-main",
+                display_name="主Key",
+                source_type="openai_gateway",
+                base_url="https://api.deepseek.com",
+                api_key="upstream-secret",
+                access_token="gateway-token",
+            )
+        ],
+    )
+    client, _session_factory = make_client()
+
+    response = client.post(
+        "/api/llm/gateway/deepseek-main/v1/chat/completions",
+        headers={"Authorization": "Bearer bad-token"},
+        json={"model": "deepseek-chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 401
+
+
+def test_llm_gateway_injects_stream_usage_options_and_reads_sse_usage(monkeypatch):
+    config = LlmUsageConfig(
+        source_id="deepseek-stream",
+        display_name="流式Key",
+        source_type="openai_gateway",
+        base_url="https://api.deepseek.com",
+        api_key="upstream-secret",
+        access_token="gateway-token",
+        request_mode="chat_completions",
+    )
+    captured = {}
+    monkeypatch.setattr(routes, "load_llm_usage_configs", lambda _settings: [config])
+
+    def fake_post(url, *, headers, json, timeout):
+        captured["json"] = json
+
+        class Response:
+            status_code = 200
+            headers = {"content-type": "text/event-stream"}
+            content = (
+                b'data: {"model":"deepseek-chat","choices":[{"delta":{"content":"OK"}}]}\n\n'
+                b'data: {"model":"deepseek-chat","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+                b"data: [DONE]\n\n"
+            )
+
+            @property
+            def text(self):
+                return self.content.decode("utf-8")
+
+            def json(self):
+                raise ValueError("not json")
+
+        return Response()
+
+    monkeypatch.setattr(routes.httpx, "post", fake_post)
+    client, session_factory = make_client()
+
+    response = client.post(
+        "/api/llm/gateway/deepseek-stream/v1/chat/completions",
+        headers={"Authorization": "Bearer gateway-token"},
+        json={"model": "deepseek-chat", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 200
+    assert captured["json"]["stream_options"]["include_usage"] is True
+    with session_factory() as db:
+        source = db.scalar(select(LlmUsageSource).where(LlmUsageSource.source_id == "deepseek-stream"))
+        snapshot = db.scalar(select(LlmUsageSnapshot).where(LlmUsageSnapshot.source_id == source.id))
+        assert snapshot.token_count == 5
+        assert snapshot.model_stats[0]["input_tokens"] == 3
+        assert snapshot.model_stats[0]["output_tokens"] == 2
 
 
 def test_llm_usage_sources_follow_config_not_stale_database_rows(tmp_path, monkeypatch):

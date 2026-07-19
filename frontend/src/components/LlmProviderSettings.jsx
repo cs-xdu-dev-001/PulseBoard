@@ -315,27 +315,32 @@ export function LlmProviderSettings() {
                     <select value={editor.source_type} onChange={(event) => handleSourceTypeChange(event.target.value)}>
                       <option value="deepseek_balance">DeepSeek官方余额</option>
                       <option value="newapi_admin">New API管理统计</option>
+                      <option value="openai_gateway">OpenAI兼容监控网关</option>
                     </select>
                   </label>
-                  {editor.source_type === 'newapi_admin' && (
+                  {providerUsesBaseUrl(editor.source_type) && (
                     <>
                       <label>
-                        <span>Base URL</span>
-                        <input value={editor.base_url} onChange={(event) => setEditor({ ...editor, base_url: event.target.value })} placeholder="https://your-new-api.example.com" />
+                        <span>{editor.source_type === 'openai_gateway' ? '上游Base URL' : 'Base URL'}</span>
+                        <input value={editor.base_url} onChange={(event) => setEditor({ ...editor, base_url: event.target.value })} placeholder={editor.source_type === 'openai_gateway' ? 'https://api.deepseek.com' : 'https://your-new-api.example.com'} />
                       </label>
-                      <label>
-                        <span>User ID</span>
-                        <input value={editor.user_id} onChange={(event) => setEditor({ ...editor, user_id: event.target.value })} placeholder="1" />
-                      </label>
-                      <label className="llm-secret-field">
-                        <span>账号余额令牌</span>
-                        <input
-                          type="password"
-                          value={editor.access_token}
-                          onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
-                          placeholder={editor.mode === 'edit-provider' ? '留空则保留原令牌' : '用于读取账号余额'}
-                        />
-                      </label>
+                      {editor.source_type === 'newapi_admin' && (
+                        <>
+                          <label>
+                            <span>User ID</span>
+                            <input value={editor.user_id} onChange={(event) => setEditor({ ...editor, user_id: event.target.value })} placeholder="1" />
+                          </label>
+                          <label className="llm-secret-field">
+                            <span>账号余额令牌</span>
+                            <input
+                              type="password"
+                              value={editor.access_token}
+                              onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
+                              placeholder={editor.mode === 'edit-provider' ? '留空则保留原令牌' : '用于读取账号余额'}
+                            />
+                          </label>
+                        </>
+                      )}
                     </>
                   )}
                   <label>
@@ -384,6 +389,27 @@ export function LlmProviderSettings() {
                         placeholder={isExistingKey ? '留空则保留原密钥' : 'sk-...'}
                       />
                     </label>
+                  ) : editor.source_type === 'openai_gateway' ? (
+                    <>
+                      <label className="llm-secret-field">
+                        <span>上游模型API Key</span>
+                        <input
+                          type="password"
+                          value={editor.api_key}
+                          onChange={(event) => setEditor({ ...editor, api_key: event.target.value })}
+                          placeholder={isExistingKey ? '留空则保留上游Key' : 'sk-...'}
+                        />
+                      </label>
+                      <label className="llm-secret-field">
+                        <span>网关访问令牌</span>
+                        <input
+                          type="password"
+                          value={editor.access_token}
+                          onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
+                          placeholder={isExistingKey ? '留空则保留网关令牌' : 'pbk-...'}
+                        />
+                      </label>
+                    </>
                   ) : (
                     <label className="llm-secret-field">
                       <span>模型API Key</span>
@@ -541,9 +567,9 @@ function keyPayload(editor, providerId, keyId, sourceId) {
     source_id: sourceId,
     display_name: editor.display_name.trim() || keyId,
     source_type: editor.source_type,
-    base_url: editor.source_type === 'newapi_admin' ? editor.base_url.trim() : '',
+    base_url: providerUsesBaseUrl(editor.source_type) ? editor.base_url.trim() : '',
     api_key: editor.api_key.trim(),
-    access_token: editor.source_type === 'newapi_admin' ? editor.access_token.trim() : '',
+    access_token: editor.source_type === 'newapi_admin' || editor.source_type === 'openai_gateway' ? editor.access_token.trim() : '',
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
     request_mode: editor.request_mode,
     test_model: editor.test_model.trim(),
@@ -554,7 +580,7 @@ function providerPayload(editor) {
   return {
     provider_name: editor.provider_name.trim() || editor.provider_id,
     source_type: editor.source_type,
-    base_url: editor.source_type === 'newapi_admin' ? editor.base_url.trim() : '',
+    base_url: providerUsesBaseUrl(editor.source_type) ? editor.base_url.trim() : '',
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
     request_mode: editor.request_mode,
     test_model: editor.test_model.trim(),
@@ -590,7 +616,9 @@ function keyIdFromSource(sourceId, providerId) {
 }
 
 function sourceTypeText(sourceType) {
-  return sourceType === 'newapi_admin' ? 'New API' : 'DeepSeek'
+  if (sourceType === 'newapi_admin') return 'New API'
+  if (sourceType === 'openai_gateway') return '监控网关'
+  return 'DeepSeek'
 }
 
 function providerMetadata(group) {
@@ -598,10 +626,21 @@ function providerMetadata(group) {
 }
 
 function providerEndpointText(item) {
+  if (item.source_type === 'openai_gateway') return item.base_url || '未配置上游接口'
   return item.source_type === 'newapi_admin' ? item.base_url || '未配置接口' : '官方接口'
 }
 
 function providerConfigItems(item) {
+  if (item.source_type === 'openai_gateway') {
+    return [
+      { label: '接入类型', value: sourceTypeText(item.source_type) },
+      { label: '上游Base URL', value: item.base_url || '未配置上游接口', warning: !item.base_url },
+      { label: '上游模型接口', value: modelEndpointText(item), warning: !item.base_url },
+      { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
+      { label: '测试模型', value: item.test_model || defaultTestModel(item.source_type) || '未配置', warning: !item.test_model },
+      { label: '网关地址', value: '/api/llm/gateway/{保存ID}/v1' },
+    ]
+  }
   if (item.source_type === 'newapi_admin') {
     return [
       { label: '接入类型', value: sourceTypeText(item.source_type) },
@@ -624,6 +663,20 @@ function providerConfigItems(item) {
 }
 
 function credentialItems(item) {
+  if (item.source_type === 'openai_gateway') {
+    return [
+      {
+        label: 'api_key',
+        complete: Boolean(item.has_api_key),
+        text: item.has_api_key ? '上游Key已填写' : '缺上游Key',
+      },
+      {
+        label: 'access_token',
+        complete: Boolean(item.has_access_token),
+        text: item.has_access_token ? '网关令牌已填写' : '缺网关令牌',
+      },
+    ]
+  }
   if (item.source_type !== 'newapi_admin') {
     return [{
       label: 'api_key',
@@ -641,6 +694,10 @@ function credentialItems(item) {
 }
 
 function credentialState(item) {
+  if (item.source_type === 'openai_gateway') {
+    if (item.has_api_key && item.has_access_token) return { complete: true, label: '网关凭据已填写' }
+    return { complete: false, label: '缺网关凭据' }
+  }
   if (item.source_type !== 'newapi_admin') {
     return { complete: Boolean(item.has_api_key), label: item.has_api_key ? 'API Key已填写' : '缺API Key' }
   }
@@ -669,11 +726,11 @@ function ConnectionResult({ label, result, testing }) {
 }
 
 function defaultRequestMode(sourceType) {
-  return sourceType === 'deepseek_balance' ? 'chat_completions' : 'responses'
+  return sourceType === 'deepseek_balance' || sourceType === 'openai_gateway' ? 'chat_completions' : 'responses'
 }
 
 function defaultTestModel(sourceType) {
-  return sourceType === 'deepseek_balance' ? 'deepseek-chat' : ''
+  return sourceType === 'deepseek_balance' || sourceType === 'openai_gateway' ? 'deepseek-chat' : ''
 }
 
 function requestModeText(requestMode) {
@@ -702,6 +759,10 @@ function modelBaseUrl(item) {
   const baseUrl = String(item.base_url || '').trim().replace(/\/+$/, '')
   if (!baseUrl) return ''
   return baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`
+}
+
+function providerUsesBaseUrl(sourceType) {
+  return sourceType === 'newapi_admin' || sourceType === 'openai_gateway'
 }
 
 function normalizedNewApiBase(baseUrl) {

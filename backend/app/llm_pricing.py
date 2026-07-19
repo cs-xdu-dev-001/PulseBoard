@@ -17,19 +17,32 @@ OPENAI_PRICES_PER_1M: dict[str, tuple[float, float]] = {
     "o4-mini": (1.1, 4.4),
 }
 
+DEEPSEEK_PRICES_PER_1M: dict[str, tuple[float, float, float]] = {
+    "deepseek-chat": (0.0028, 0.14, 0.28),
+    "deepseek-reasoner": (0.0028, 0.14, 0.28),
+    "deepseek-v3.2-exp": (0.0028, 0.14, 0.28),
+    "deepseek-v4-flash": (0.0028, 0.14, 0.28),
+    "deepseek-v4-pro": (0.003625, 0.435, 0.87),
+}
+
 
 def estimate_model_cost_usd(
     model: str,
     *,
     input_tokens: float | None = None,
     output_tokens: float | None = None,
+    cache_hit_input_tokens: float | None = None,
+    cache_miss_input_tokens: float | None = None,
     token_count: float | None = None,
     raw_quota: float | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_model(model)
     pricing = OPENAI_PRICES_PER_1M.get(normalized)
+    deepseek_pricing = DEEPSEEK_PRICES_PER_1M.get(normalized)
     input_count = _number(input_tokens)
     output_count = _number(output_tokens)
+    cache_hit_count = _number(cache_hit_input_tokens)
+    cache_miss_count = _number(cache_miss_input_tokens)
     total_count = _number(token_count)
     quota = _number(raw_quota)
 
@@ -38,6 +51,29 @@ def estimate_model_cost_usd(
             "estimated_cost_usd": round(quota / NEWAPI_QUOTA_PER_USD, 6),
             "pricing_basis": "newapi_quota",
             "pricing_model": normalized,
+        }
+
+    if deepseek_pricing and (
+        input_count is not None
+        or output_count is not None
+        or cache_hit_count is not None
+        or cache_miss_count is not None
+        or total_count is not None
+    ):
+        if cache_hit_count is not None or cache_miss_count is not None:
+            hit = cache_hit_count or 0
+            miss = cache_miss_count or 0
+        else:
+            hit = 0
+            miss = input_count if input_count is not None else total_count or 0
+        cost = (hit * deepseek_pricing[0] + miss * deepseek_pricing[1] + (output_count or 0) * deepseek_pricing[2]) / 1_000_000
+        return {
+            "estimated_cost_usd": round(cost, 6),
+            "pricing_basis": "deepseek_tokens",
+            "pricing_model": normalized,
+            "cache_hit_input_price_per_1m": deepseek_pricing[0],
+            "cache_miss_input_price_per_1m": deepseek_pricing[1],
+            "output_price_per_1m": deepseek_pricing[2],
         }
 
     if pricing and (input_count is not None or output_count is not None or total_count is not None):
@@ -74,6 +110,8 @@ def estimate_snapshot_cost_usd(
                 str(item.get("model") or "unknown"),
                 input_tokens=item.get("input_tokens"),
                 output_tokens=item.get("output_tokens"),
+                cache_hit_input_tokens=item.get("cache_hit_input_tokens"),
+                cache_miss_input_tokens=item.get("cache_miss_input_tokens"),
                 token_count=item.get("token_count"),
                 raw_quota=item.get("amount"),
             )

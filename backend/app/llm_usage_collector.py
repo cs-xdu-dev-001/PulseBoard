@@ -35,6 +35,8 @@ NEWAPI_ENDPOINTS = {
 
 def collect_llm_usage_once(db: Session, settings: Settings) -> None:
     for config in load_llm_usage_configs(settings):
+        if config.source_type == "openai_gateway":
+            continue
         result = collect_source(config)
         persist_result(db, result, datetime.now(timezone.utc))
     db.commit()

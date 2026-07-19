@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+import time
 import re
 from typing import Literal
 from urllib.parse import quote, quote_plus
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -19,8 +22,10 @@ from app.llm_usage import (
     load_llm_usage_configs,
     save_llm_usage_config,
     update_llm_provider_config,
+    LlmUsageConfig,
+    LlmUsageResult,
 )
-from app.llm_usage_collector import check_model_connection, collect_llm_usage_once, collect_source
+from app.llm_usage_collector import check_model_connection, collect_llm_usage_once, collect_source, persist_result
 from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
 from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSource, Machine, MachineMetric, VpsMetric, VpsNode
 from app.settings_config import load_app_settings, save_app_settings
@@ -487,6 +492,53 @@ def llm_usage_refresh(db: Session = Depends(get_db)) -> dict:
     return {"ok": True}
 
 
+@router.post("/llm/gateway/{source_id}/v1/{resource:path}")
+async def llm_gateway_proxy(
+    source_id: str,
+    resource: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    config = _llm_gateway_config(source_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"gateway source {source_id} does not exist")
+    if resource not in {"chat/completions", "responses"}:
+        raise HTTPException(status_code=404, detail="only chat/completions and responses are supported")
+    if not config.base_url:
+        raise HTTPException(status_code=422, detail="gateway upstream Base URL is not configured")
+    if not config.api_key:
+        raise HTTPException(status_code=422, detail="gateway upstream API Key is not configured")
+    if not config.access_token:
+        raise HTTPException(status_code=422, detail="gateway access token is not configured")
+    if _bearer_token(request.headers.get("authorization")) != config.access_token:
+        raise HTTPException(status_code=401, detail="invalid gateway token")
+
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="request body must be JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    started = time.perf_counter()
+    forward_payload = _gateway_forward_payload(payload, resource)
+    response = httpx.post(
+        _gateway_upstream_url(config.base_url, resource),
+        headers=_gateway_upstream_headers(request, config),
+        json=forward_payload,
+        timeout=600,
+    )
+    latency = time.perf_counter() - started
+    result = _gateway_usage_result(config, forward_payload, response, latency)
+    persist_result(db, result, datetime.now(timezone.utc))
+    db.commit()
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        media_type=response.headers.get("content-type", "application/json").split(";", 1)[0],
+    )
+
+
 def _source_payload(source: DataSource | None) -> dict:
     if source is None:
         return {"status": "unknown", "consecutive_failures": 0, "last_success_at": None}
@@ -749,6 +801,177 @@ def _llm_usage_capability(source_rows: list[LlmUsageSource]) -> dict:
             "usage_message": "部分来源仅提供余额，未计入请求、token、模型用量统计",
         }
     return {"usage_supported": True, "usage_scope": "full", "usage_message": None}
+
+
+def _llm_gateway_config(source_id: str) -> LlmUsageConfig | None:
+    return next(
+        (
+            config
+            for config in load_llm_usage_configs(get_settings())
+            if config.source_id == source_id and config.source_type == "openai_gateway"
+        ),
+        None,
+    )
+
+
+def _bearer_token(value: str | None) -> str | None:
+    if not value:
+        return None
+    parts = value.strip().split(" ", 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
+
+
+def _gateway_upstream_url(base_url: str, resource: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/{resource}"
+    return f"{normalized}/v1/{resource}"
+
+
+def _gateway_upstream_headers(request: Request, config: LlmUsageConfig) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
+    accept = request.headers.get("accept")
+    if accept:
+        headers["Accept"] = accept
+    return headers
+
+
+def _gateway_forward_payload(payload: dict, resource: str) -> dict:
+    result = dict(payload)
+    if resource == "chat/completions" and result.get("stream") is True:
+        stream_options = result.get("stream_options")
+        if not isinstance(stream_options, dict):
+            stream_options = {}
+        result["stream_options"] = {**stream_options, "include_usage": True}
+    return result
+
+
+def _gateway_usage_result(
+    config: LlmUsageConfig,
+    request_payload: dict,
+    response: httpx.Response,
+    latency_seconds: float,
+) -> LlmUsageResult:
+    response_payload = _response_json(response)
+    usage = response_payload.get("usage") if isinstance(response_payload, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+    model = str(
+        (response_payload.get("model") if isinstance(response_payload, dict) else None)
+        or request_payload.get("model")
+        or config.test_model
+        or "unknown"
+    )
+    input_tokens = _number_from_any(usage, ["prompt_tokens", "input_tokens"])
+    output_tokens = _number_from_any(usage, ["completion_tokens", "output_tokens"])
+    cache_hit_tokens = _number_from_any(usage, ["prompt_cache_hit_tokens", "cache_hit_input_tokens"])
+    cache_miss_tokens = _number_from_any(usage, ["prompt_cache_miss_tokens", "cache_miss_input_tokens"])
+    total_tokens = _number_from_any(usage, ["total_tokens", "total_token"])
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+    estimate = estimate_model_cost_usd(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_hit_input_tokens=cache_hit_tokens,
+        cache_miss_input_tokens=cache_miss_tokens,
+        token_count=total_tokens,
+    )
+    model_stats = [
+        {
+            "model": model,
+            "request_count": 1,
+            "token_count": total_tokens or 0,
+            "input_tokens": input_tokens or 0,
+            "output_tokens": output_tokens or 0,
+            "cache_hit_input_tokens": cache_hit_tokens or 0,
+            "cache_miss_input_tokens": cache_miss_tokens or 0,
+            "estimated_cost_usd": estimate["estimated_cost_usd"],
+            "pricing_basis": estimate["pricing_basis"],
+        }
+    ]
+    error = None if response.status_code < 400 else _gateway_error_message(response)
+    return LlmUsageResult(
+        source_id=config.source_id,
+        display_name=config.display_name,
+        source_type=config.source_type,
+        status="online" if response.status_code < 400 else "offline",
+        request_count=1,
+        token_count=total_tokens,
+        estimated_amount=estimate["estimated_cost_usd"],
+        success_rate=100 if response.status_code < 400 else 0,
+        avg_latency_seconds=round(latency_seconds, 4),
+        model_stats=model_stats,
+        raw_summary={
+            "gateway": {
+                "resource": request_payload.get("model"),
+                "status_code": response.status_code,
+                "usage": usage,
+                "pricing_basis": estimate["pricing_basis"],
+            }
+        },
+        error=error,
+    )
+
+
+def _response_json(response: httpx.Response) -> dict:
+    try:
+        payload = response.json()
+    except ValueError:
+        return _sse_usage_payload(response.text)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sse_usage_payload(text: str) -> dict:
+    usage = None
+    model = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        model = payload.get("model") or model
+        if isinstance(payload.get("usage"), dict):
+            usage = payload["usage"]
+    if usage:
+        return {"model": model, "usage": usage}
+    return {"model": model} if model else {}
+
+
+def _number_from_any(value: dict, keys: list[str]) -> float | None:
+    for key in keys:
+        number = value.get(key)
+        if number is None or number == "":
+            continue
+        try:
+            return float(number)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _gateway_error_message(response: httpx.Response) -> str:
+    payload = _response_json(response)
+    if payload:
+        error = payload.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("code") or f"HTTP {response.status_code}")[:1000]
+        if error:
+            return str(error)[:1000]
+        for key in ("message", "detail"):
+            if payload.get(key):
+                return str(payload[key])[:1000]
+    return f"HTTP {response.status_code}"
 
 
 def _iso(value: datetime | None) -> str | None:

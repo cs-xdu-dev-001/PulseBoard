@@ -726,6 +726,18 @@ def test_newapi_quota_is_preferred_over_openai_token_estimate():
     assert result["pricing_basis"] == "newapi_quota"
 
 
+def test_deepseek_pricing_uses_cache_hit_miss_and_output_tokens():
+    result = llm_usage.estimate_model_cost_usd(
+        "deepseek-chat",
+        cache_hit_input_tokens=100_000,
+        cache_miss_input_tokens=200_000,
+        output_tokens=50_000,
+    )
+
+    assert result["pricing_basis"] == "deepseek_tokens"
+    assert result["estimated_cost_usd"] == 0.04228
+
+
 def test_save_llm_usage_config_writes_env_without_echoing_secret(tmp_path, monkeypatch):
     env_path = tmp_path / "test.env"
     env_path.write_text("PULSEBOARD_LLM_USAGE_SOURCES=academic\n", encoding="utf-8")
@@ -793,6 +805,67 @@ def test_save_newapi_config_writes_model_test_settings_and_both_secrets(tmp_path
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4" in text
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_API_KEY=model-secret" in text
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=stats-secret" in text
+
+
+def test_save_openai_gateway_config_writes_upstream_key_and_gateway_token(tmp_path):
+    env_path = tmp_path / "test.env"
+
+    save_llm_usage_config(
+        {
+            "source_id": "deepseek-main",
+            "source_type": "openai_gateway",
+            "provider_id": "deepseek-gateway",
+            "provider_name": "DeepSeek监控网关",
+            "display_name": "主Key",
+            "base_url": "https://api.deepseek.com",
+            "request_mode": "chat_completions",
+            "test_model": "deepseek-chat",
+            "api_key": "upstream-secret",
+            "access_token": "gateway-token",
+        },
+        env_path=env_path,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=openai_gateway" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_BASE_URL=https://api.deepseek.com" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=upstream-secret" in text
+    assert "PULSEBOARD_LLM_DEEPSEEK_MAIN_ACCESS_TOKEN=gateway-token" in text
+
+
+def test_save_openai_gateway_config_requires_new_key_gateway_token(tmp_path):
+    env_path = tmp_path / "test.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=deepseek-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=openai_gateway",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_BASE_URL=https://api.deepseek.com",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=upstream-main",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_ACCESS_TOKEN=main-gateway-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gateway access token"):
+        save_llm_usage_config(
+            {
+                "source_id": "deepseek-backup",
+                "source_type": "openai_gateway",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "display_name": "备用Key",
+                "base_url": "https://api.deepseek.com",
+                "api_key": "upstream-backup",
+                "access_token": "",
+            },
+            env_path=env_path,
+        )
 
 
 def test_save_llm_usage_config_rejects_unknown_request_mode(tmp_path):

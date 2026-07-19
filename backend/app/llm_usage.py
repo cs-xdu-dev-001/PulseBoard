@@ -131,8 +131,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", source_id):
         raise ValueError("source_id must use lowercase letters, numbers, '-' or '_'")
     source_type = str(values.get("source_type") or "").strip()
-    if source_type not in {"deepseek_balance", "newapi_admin"}:
-        raise ValueError("source_type must be deepseek_balance or newapi_admin")
+    if source_type not in {"deepseek_balance", "newapi_admin", "openai_gateway"}:
+        raise ValueError("source_type must be deepseek_balance, newapi_admin or openai_gateway")
     provider_id = str(values.get("provider_id") or source_id).strip()
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", provider_id):
         raise ValueError("provider_id must use lowercase letters, numbers, '-' or '_'")
@@ -150,13 +150,15 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
 
     env = _merged_env(env_path)
     sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
+    source_exists = source_id in sources
     shared = _provider_shared_values(env, sources, provider_id)
     access_token = str(values.get("access_token") or "").strip()
     if shared:
         source_type = shared["source_type"]
         provider_name = shared["provider_name"]
         base_url = shared["base_url"] if shared["has_base_url"] else base_url
-        access_token = access_token or shared["access_token"]
+        if source_type != "openai_gateway":
+            access_token = access_token or shared["access_token"]
         user_id = shared["user_id"] if shared["has_user_id"] else user_id
         request_mode = shared["request_mode"] if shared["has_request_mode"] else str(
             values.get("request_mode")
@@ -169,6 +171,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     elif source_type == "deepseek_balance":
         base_url = ""
         user_id = "1"
+    if source_type == "openai_gateway" and not access_token and not source_exists:
+        raise ValueError("gateway access token is required for a new gateway key")
     if request_mode not in {"responses", "chat_completions"}:
         raise ValueError("request_mode must be responses or chat_completions")
     for existing_source_id in sources:
@@ -190,7 +194,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     }
     if values.get("api_key"):
         updates[prefix + "API_KEY"] = str(values["api_key"]).strip()
-    if source_type == "newapi_admin" and access_token:
+    if source_type in {"newapi_admin", "openai_gateway"} and access_token:
         updates[prefix + "ACCESS_TOKEN"] = access_token
 
     if shared:
@@ -260,8 +264,8 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
     env = _merged_env(env_path)
     existing = _provider_shared_values(env, source_ids, provider_id)
     source_type = str(values.get("source_type") or "").strip()
-    if source_type not in {"deepseek_balance", "newapi_admin"}:
-        raise ValueError("source_type must be deepseek_balance or newapi_admin")
+    if source_type not in {"deepseek_balance", "newapi_admin", "openai_gateway"}:
+        raise ValueError("source_type must be deepseek_balance, newapi_admin or openai_gateway")
     provider_name = str(values.get("provider_name") or provider_id).strip()
     base_url = str(values.get("base_url") or "").strip()
     user_id = str(values.get("user_id") or "1").strip() or "1"
@@ -295,7 +299,7 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
                 prefix + "TEST_MODEL": test_model,
             }
         )
-        if source_type == "newapi_admin":
+        if source_type in {"newapi_admin", "openai_gateway"}:
             updates[prefix + "BASE_URL"] = base_url
             updates[prefix + "USER_ID"] = user_id
             if access_token:
