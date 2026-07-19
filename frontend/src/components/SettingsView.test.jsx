@@ -191,7 +191,7 @@ describe('Settings LLM供应商配置', () => {
     expect(within(provider).queryByText('未填余额令牌')).not.toBeInTheDocument()
   })
 
-  it('新增OpenAI兼容监控网关时配置项清晰区分上游Key和网关令牌', async () => {
+  it('新增OpenAI兼容监控网关时网关令牌在供应商配置里', async () => {
     render(<SettingsView />)
 
     fireEvent.click(await screen.findByRole('button', { name: '新增供应商' }))
@@ -200,8 +200,8 @@ describe('Settings LLM供应商配置', () => {
     fireEvent.change(screen.getByLabelText('接入类型'), { target: { value: 'openai_gateway' } })
 
     expect(screen.getByLabelText('上游Base URL')).toHaveValue('')
-    expect(screen.getByLabelText('网关访问令牌')).toHaveValue('')
     expect(screen.getByLabelText('上游模型API Key')).toHaveValue('')
+    expect(screen.getByLabelText('网关访问令牌')).toHaveValue('')
 
     fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'main' } })
     fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: '主Key' } })
@@ -221,6 +221,47 @@ describe('Settings LLM供应商配置', () => {
         access_token: 'pbk-local-token',
         request_mode: 'chat_completions',
         test_model: 'deepseek-chat',
+      }))
+    })
+  })
+
+  it('已有OpenAI兼容监控网关下新增Key时不重复填写网关令牌', async () => {
+    fetchLlmConfig.mockResolvedValueOnce({
+      sources: [
+        {
+          source_id: 'deepseek-gateway-main',
+          provider_id: 'deepseek-gateway',
+          provider_name: 'DeepSeek网关',
+          display_name: '主Key',
+          source_type: 'openai_gateway',
+          base_url: 'https://api.deepseek.com',
+          user_id: '1',
+          request_mode: 'chat_completions',
+          test_model: 'deepseek-chat',
+          has_api_key: true,
+          has_access_token: true,
+        },
+      ],
+    })
+    render(<SettingsView />)
+
+    const provider = await screen.findByTestId('llm-provider-deepseek-gateway')
+    fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
+
+    expect(screen.queryByLabelText('网关访问令牌')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('上游模型API Key')).toHaveValue('')
+
+    fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'backup' } })
+    fireEvent.change(screen.getByLabelText('上游模型API Key'), { target: { value: 'sk-backup' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
+
+    await waitFor(() => {
+      expect(saveLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+        provider_id: 'deepseek-gateway',
+        source_id: 'deepseek-gateway-backup',
+        source_type: 'openai_gateway',
+        api_key: 'sk-backup',
+        access_token: '',
       }))
     })
   })

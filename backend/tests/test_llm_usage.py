@@ -1062,7 +1062,7 @@ def test_deepseek_platform_key_inherits_provider_platform_token(tmp_path):
     assert "PULSEBOARD_LLM_DEEPSEEK_CODEX_ACCESS_TOKEN=platform-token" in text
 
 
-def test_save_openai_gateway_config_requires_new_key_gateway_token(tmp_path):
+def test_openai_gateway_key_inherits_provider_gateway_token(tmp_path):
     env_path = tmp_path / "test.env"
     env_path.write_text(
         "\n".join(
@@ -1081,20 +1081,26 @@ def test_save_openai_gateway_config_requires_new_key_gateway_token(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="gateway access token"):
-        save_llm_usage_config(
-            {
-                "source_id": "deepseek-backup",
-                "source_type": "openai_gateway",
-                "provider_id": "deepseek",
-                "provider_name": "DeepSeek",
-                "display_name": "备用Key",
-                "base_url": "https://api.deepseek.com",
-                "api_key": "upstream-backup",
-                "access_token": "",
-            },
-            env_path=env_path,
-        )
+    save_llm_usage_config(
+        {
+            "source_id": "deepseek-backup",
+            "source_type": "openai_gateway",
+            "provider_id": "deepseek",
+            "provider_name": "DeepSeek",
+            "display_name": "备用Key",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "upstream-backup",
+            "access_token": "",
+        },
+        env_path=env_path,
+    )
+
+    added = next(config for config in load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path) if config.source_id == "deepseek-backup")
+    text = env_path.read_text(encoding="utf-8")
+    assert added.source_type == "openai_gateway"
+    assert added.access_token == "main-gateway-token"
+    assert added.api_key == "upstream-backup"
+    assert "PULSEBOARD_LLM_DEEPSEEK_BACKUP_ACCESS_TOKEN=main-gateway-token" in text
 
 
 def test_save_llm_usage_config_rejects_unknown_request_mode(tmp_path):

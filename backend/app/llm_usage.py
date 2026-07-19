@@ -158,8 +158,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
         source_type = shared["source_type"]
         provider_name = shared["provider_name"]
         base_url = shared["base_url"] if shared["has_base_url"] else base_url
-        if source_type != "openai_gateway":
-            access_token = access_token or shared["access_token"]
+        access_token = access_token or shared["access_token"]
         user_id = shared["user_id"] if shared["has_user_id"] else user_id
         request_mode = shared["request_mode"] if shared["has_request_mode"] else str(
             values.get("request_mode")
@@ -172,7 +171,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     elif source_type in {"deepseek_balance", "deepseek_platform"}:
         base_url = ""
         user_id = "1"
-    if source_type == "openai_gateway" and not access_token and not source_exists:
+    if source_type == "openai_gateway" and not access_token and not source_exists and not shared:
         raise ValueError("gateway access token is required for a new gateway key")
     if source_type == "deepseek_platform" and not access_token and not source_exists and not shared:
         raise ValueError("DeepSeek platform token is required for platform usage statistics")
@@ -216,7 +215,7 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
                     existing_prefix + "TEST_MODEL": test_model,
                 }
             )
-            if source_type in {"deepseek_platform", "newapi_admin"} and access_token:
+            if source_type in {"deepseek_platform", "newapi_admin", "openai_gateway"} and access_token:
                 updates[existing_prefix + "ACCESS_TOKEN"] = access_token
 
     _write_env(env_path, updates)
