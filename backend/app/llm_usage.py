@@ -151,10 +151,12 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     env = _merged_env(env_path)
     sources = [item.strip() for item in env.get("PULSEBOARD_LLM_USAGE_SOURCES", "").split(",") if item.strip()]
     shared = _provider_shared_values(env, sources, provider_id)
+    access_token = str(values.get("access_token") or "").strip()
     if shared:
         source_type = shared["source_type"]
         provider_name = shared["provider_name"]
         base_url = shared["base_url"] if shared["has_base_url"] else base_url
+        access_token = access_token or shared["access_token"]
         user_id = shared["user_id"] if shared["has_user_id"] else user_id
         request_mode = shared["request_mode"] if shared["has_request_mode"] else str(
             values.get("request_mode")
@@ -188,8 +190,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
     }
     if values.get("api_key"):
         updates[prefix + "API_KEY"] = str(values["api_key"]).strip()
-    if values.get("access_token"):
-        updates[prefix + "ACCESS_TOKEN"] = str(values["access_token"]).strip()
+    if source_type == "newapi_admin" and access_token:
+        updates[prefix + "ACCESS_TOKEN"] = access_token
 
     if shared:
         for existing_source_id in sources:
@@ -207,6 +209,8 @@ def save_llm_usage_config(values: dict[str, Any], env_path: Path | None = None) 
                     existing_prefix + "TEST_MODEL": test_model,
                 }
             )
+            if source_type == "newapi_admin" and access_token:
+                updates[existing_prefix + "ACCESS_TOKEN"] = access_token
 
     _write_env(env_path, updates)
     return {"source_id": source_id, "provider_id": provider_id}
@@ -276,6 +280,7 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
         if same_source_type
         else ("deepseek-chat" if source_type == "deepseek_balance" else "")
     )
+    access_token = str(values.get("access_token") or "").strip()
 
     updates: dict[str, str] = {}
     deletes: set[str] = set()
@@ -293,8 +298,10 @@ def update_llm_provider_config(provider_id: str, values: dict[str, Any], env_pat
         if source_type == "newapi_admin":
             updates[prefix + "BASE_URL"] = base_url
             updates[prefix + "USER_ID"] = user_id
+            if access_token:
+                updates[prefix + "ACCESS_TOKEN"] = access_token
         else:
-            deletes.update({prefix + "BASE_URL", prefix + "USER_ID"})
+            deletes.update({prefix + "BASE_URL", prefix + "USER_ID", prefix + "ACCESS_TOKEN"})
     _write_env(env_path, updates, deletes)
     return {"updated": source_ids}
 
@@ -506,6 +513,8 @@ def _provider_shared_values(env: dict[str, str], source_ids: list[str], provider
             "provider_name": (env.get(prefix + "PROVIDER_NAME") or provider_id).strip(),
             "base_url": (env.get(prefix + "BASE_URL") or "").strip(),
             "has_base_url": bool((env.get(prefix + "BASE_URL") or "").strip()),
+            "access_token": (env.get(prefix + "ACCESS_TOKEN") or "").strip(),
+            "has_access_token": bool((env.get(prefix + "ACCESS_TOKEN") or "").strip()),
             "user_id": (env.get(prefix + "USER_ID") or "1").strip() or "1",
             "has_user_id": prefix + "USER_ID" in env,
             "request_mode": (

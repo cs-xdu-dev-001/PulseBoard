@@ -548,6 +548,7 @@ def test_update_llm_provider_config_route(monkeypatch):
             "request_mode": "responses",
             "test_model": "gpt-5.4",
             "user_id": "2",
+            "access_token": "provider-token",
         },
     )
 
@@ -563,6 +564,7 @@ def test_update_llm_provider_config_route(monkeypatch):
                 "request_mode": "responses",
                 "test_model": "gpt-5.4",
                 "user_id": "2",
+                "access_token": "provider-token",
             },
         )
     ]

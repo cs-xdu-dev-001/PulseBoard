@@ -327,6 +327,15 @@ export function LlmProviderSettings() {
                         <span>User ID</span>
                         <input value={editor.user_id} onChange={(event) => setEditor({ ...editor, user_id: event.target.value })} placeholder="1" />
                       </label>
+                      <label className="llm-secret-field">
+                        <span>账号余额令牌</span>
+                        <input
+                          type="password"
+                          value={editor.access_token}
+                          onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
+                          placeholder={editor.mode === 'edit-provider' ? '留空则保留原令牌' : '用于读取账号余额'}
+                        />
+                      </label>
                     </>
                   )}
                   <label>
@@ -376,26 +385,15 @@ export function LlmProviderSettings() {
                       />
                     </label>
                   ) : (
-                    <>
-                      <label className="llm-secret-field">
-                        <span>账号余额令牌</span>
-                        <input
-                          type="password"
-                          value={editor.access_token}
-                          onChange={(event) => setEditor({ ...editor, access_token: event.target.value })}
-                          placeholder={isExistingKey ? '留空则保留原令牌' : '可选，用于账号余额'}
-                        />
-                      </label>
-                      <label className="llm-secret-field">
-                        <span>模型API Key</span>
-                        <input
-                          type="password"
-                          value={editor.api_key}
-                          onChange={(event) => setEditor({ ...editor, api_key: event.target.value })}
-                          placeholder={isExistingKey ? '留空则保留原Key' : 'sk-...'}
-                        />
-                      </label>
-                    </>
+                    <label className="llm-secret-field">
+                      <span>模型API Key</span>
+                      <input
+                        type="password"
+                        value={editor.api_key}
+                        onChange={(event) => setEditor({ ...editor, api_key: event.target.value })}
+                        placeholder={isExistingKey ? '留空则保留原Key' : 'sk-...'}
+                      />
+                    </label>
                   )}
                 </div>
               </fieldset>
@@ -414,6 +412,12 @@ export function LlmProviderSettings() {
           const expanded = Boolean(expandedProviders[group.provider_id])
           const unconfiguredCount = group.items.filter((item) => !credentialState(item).complete).length
           const providerMeta = providerMetadata(group)
+          const providerTokenMissing = providerMeta.source_type === 'newapi_admin' && !providerMeta.has_access_token
+          const credentialSummary = providerTokenMissing
+            ? '余额令牌未填'
+            : unconfiguredCount
+              ? `${unconfiguredCount}个Key凭据不完整`
+              : '凭据已填写'
           return (
             <article className="provider-settings-row" data-testid={`llm-provider-${group.provider_id}`} key={group.provider_id}>
               <header>
@@ -425,8 +429,8 @@ export function LlmProviderSettings() {
                     <span className="provider-endpoint">{providerEndpointText(providerMeta)}</span>
                     <span className="provider-model-config">{requestConfigText(providerMeta)}</span>
                     <span className="provider-key-count">{group.items.length}个Key</span>
-                    <span className={`provider-secret-summary ${unconfiguredCount ? 'warning' : 'configured'}`}>
-                      {unconfiguredCount ? `${unconfiguredCount}个Key凭据不完整` : '凭据已填写'}
+                    <span className={`provider-secret-summary ${providerTokenMissing || unconfiguredCount ? 'warning' : 'configured'}`}>
+                      {credentialSummary}
                     </span>
                   </div>
                 </div>
@@ -554,6 +558,7 @@ function providerPayload(editor) {
     user_id: editor.source_type === 'newapi_admin' ? editor.user_id.trim() || '1' : '',
     request_mode: editor.request_mode,
     test_model: editor.test_model.trim(),
+    access_token: editor.source_type === 'newapi_admin' ? editor.access_token.trim() : '',
   }
 }
 
@@ -603,6 +608,7 @@ function providerConfigItems(item) {
       { label: 'Base URL', value: item.base_url || '未配置接口', warning: !item.base_url },
       { label: '管理统计', value: newApiAdminEndpointText(item), warning: !item.base_url },
       { label: '模型接口', value: modelEndpointText(item), warning: !item.base_url },
+      { label: '余额令牌', value: item.has_access_token ? '已填写' : '未填写', warning: !item.has_access_token },
       { label: 'User ID', value: item.user_id || '1' },
       { label: '请求方式', value: requestModeText(item.request_mode || defaultRequestMode(item.source_type)) },
       { label: '测试模型', value: item.test_model || '未配置', warning: !item.test_model },
@@ -627,11 +633,6 @@ function credentialItems(item) {
   }
   return [
     {
-      label: 'access_token',
-      complete: Boolean(item.has_access_token),
-      text: item.has_access_token ? '余额令牌已填写' : '未填余额令牌',
-    },
-    {
       label: 'api_key',
       complete: Boolean(item.has_api_key),
       text: item.has_api_key ? '模型Key已填写' : '缺模型Key',
@@ -643,7 +644,7 @@ function credentialState(item) {
   if (item.source_type !== 'newapi_admin') {
     return { complete: Boolean(item.has_api_key), label: item.has_api_key ? 'API Key已填写' : '缺API Key' }
   }
-  if (item.has_api_key) return { complete: true, label: item.has_access_token ? 'Key和余额令牌已填写' : 'Key已填写' }
+  if (item.has_api_key) return { complete: true, label: '模型Key已填写' }
   return { complete: false, label: '缺模型Key' }
 }
 

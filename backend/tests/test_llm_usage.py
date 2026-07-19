@@ -943,6 +943,7 @@ def test_update_llm_provider_config_updates_shared_fields(tmp_path):
             "request_mode": "responses",
             "test_model": "gpt-5.4",
             "user_id": "2",
+            "access_token": "provider-token",
         },
         env_path=env_path,
     )
@@ -958,7 +959,8 @@ def test_update_llm_provider_config_updates_shared_fields(tmp_path):
     assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_REQUEST_MODE=responses" in text
     assert "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4" in text
     assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_TEST_MODEL=gpt-5.4" in text
-    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=main-token" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=provider-token" in text
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_ACCESS_TOKEN=provider-token" in text
 
 
 def test_save_key_inherits_existing_provider_shared_fields(tmp_path):
@@ -971,6 +973,7 @@ def test_save_key_inherits_existing_provider_shared_fields(tmp_path):
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=Academic Gateway",
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_BASE_URL=https://gateway.example.com",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=provider-token",
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_USER_ID=7",
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_REQUEST_MODE=responses",
                 "PULSEBOARD_LLM_ACADEMIC_MAIN_TEST_MODEL=gpt-5.4",
@@ -992,11 +995,11 @@ def test_save_key_inherits_existing_provider_shared_fields(tmp_path):
             "request_mode": "chat_completions",
             "test_model": "other-model",
             "api_key": "model-secret",
-            "access_token": "stats-secret",
         },
         env_path=env_path,
     )
 
+    text = env_path.read_text(encoding="utf-8")
     configs = load_llm_usage_configs(Settings(llm_usage_sources=""), env_path=env_path)
     added = next(config for config in configs if config.source_id == "academic-backup")
     assert added.provider_name == "Academic Gateway"
@@ -1005,6 +1008,8 @@ def test_save_key_inherits_existing_provider_shared_fields(tmp_path):
     assert added.user_id == "7"
     assert added.request_mode == "responses"
     assert added.test_model == "gpt-5.4"
+    assert added.access_token == "provider-token"
+    assert "PULSEBOARD_LLM_ACADEMIC_BACKUP_ACCESS_TOKEN=provider-token" in text
 
 
 def test_update_provider_preserves_request_settings_when_optional_fields_are_missing(tmp_path):

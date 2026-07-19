@@ -49,6 +49,7 @@ class LlmProviderConfigPayload(BaseModel):
     source_type: str
     base_url: str | None = None
     user_id: str | None = None
+    access_token: str | None = None
     request_mode: str | None = None
     test_model: str | None = None
 

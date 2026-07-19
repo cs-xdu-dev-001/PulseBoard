@@ -133,7 +133,6 @@ describe('Settings LLM供应商配置', () => {
     fireEvent.click(within(provider).getByRole('button', { name: '添加Key' }))
     fireEvent.change(screen.getByLabelText('Key ID'), { target: { value: 'backup' } })
     fireEvent.change(screen.getByLabelText('Key展示名'), { target: { value: '备用账号' } })
-    fireEvent.change(screen.getByLabelText('账号余额令牌'), { target: { value: 'token-value' } })
     fireEvent.change(screen.getByLabelText('模型API Key'), { target: { value: 'model-key-value' } })
 
     expect(screen.queryByLabelText('接入类型')).not.toBeInTheDocument()
@@ -141,6 +140,7 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.queryByLabelText('User ID')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('模型请求方式')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('测试模型')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('账号余额令牌')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '保存API Key' }))
 
@@ -155,7 +155,7 @@ describe('Settings LLM供应商配置', () => {
         request_mode: 'responses',
         test_model: 'gpt-5.4',
         api_key: 'model-key-value',
-        access_token: 'token-value',
+        access_token: '',
         user_id: '1',
       }))
     })
@@ -180,12 +180,15 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '留空则保留原密钥')
   })
 
-  it('New API分别显示余额令牌和模型Key的配置状态', async () => {
+  it('New API在供应商配置显示余额令牌状态，Key行只显示模型Key状态', async () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-academic')
     fireEvent.click(within(provider).getByRole('button', { name: '展开Academic Gateway的Key' }))
-    expect(within(provider).getByText('未填余额令牌')).toBeVisible()
+    expect(within(provider).getByText('余额令牌')).toBeVisible()
+    expect(within(provider).getByText('未填写')).toBeVisible()
+    expect(within(provider).getByText('模型Key已填写')).toBeVisible()
+    expect(within(provider).queryByText('未填余额令牌')).not.toBeInTheDocument()
   })
 
   it('可以测试单个Key并在对应行显示在线状态', async () => {
@@ -305,7 +308,7 @@ describe('Settings LLM供应商配置', () => {
     expect(within(provider).getAllByText('未测试')).toHaveLength(2)
   })
 
-  it('编辑供应商公共配置时不出现密钥字段', async () => {
+  it('编辑New API供应商公共配置时可以更新账号余额令牌', async () => {
     render(<SettingsView />)
 
     const provider = await screen.findByTestId('llm-provider-academic')
@@ -319,13 +322,14 @@ describe('Settings LLM供应商配置', () => {
     expect(screen.getByLabelText('User ID')).toHaveValue('1')
     expect(screen.getByLabelText('模型请求方式')).toHaveValue('responses')
     expect(screen.getByLabelText('测试模型')).toHaveValue('gpt-5.4')
-    expect(screen.queryByLabelText('账号余额令牌')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('账号余额令牌')).toHaveValue('')
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('模型API Key')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'Academic' } })
     fireEvent.change(screen.getByLabelText('User ID'), { target: { value: '2' } })
     fireEvent.change(screen.getByLabelText('测试模型'), { target: { value: 'gpt-5.4-mini' } })
+    fireEvent.change(screen.getByLabelText('账号余额令牌'), { target: { value: 'provider-token' } })
     fireEvent.click(screen.getByRole('button', { name: '保存供应商' }))
 
     await waitFor(() => {
@@ -336,6 +340,7 @@ describe('Settings LLM供应商配置', () => {
         request_mode: 'responses',
         test_model: 'gpt-5.4-mini',
         user_id: '2',
+        access_token: 'provider-token',
       })
     })
   })
@@ -372,7 +377,7 @@ describe('Settings LLM供应商配置', () => {
     const deepseek = screen.getByTestId('llm-provider-deepseek')
     expect(within(academic).getByText('New API')).toBeVisible()
     expect(within(academic).getByText('https://gateway.example.com')).toBeVisible()
-    expect(within(academic).getByText('凭据已填写')).toBeVisible()
+    expect(within(academic).getByText('余额令牌未填')).toBeVisible()
     expect(within(academic).getByText('Responses · gpt-5.4')).toBeVisible()
     expect(within(deepseek).getByText('凭据已填写')).toBeVisible()
   })
