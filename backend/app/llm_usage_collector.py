@@ -26,10 +26,10 @@ NEWAPI_ENDPOINTS = {
     "token_usage": ("/api/usage/token/",),
     "token_logs": ("/api/log/token",),
     "token_search": "/api/token/search?p=1&page_size=1&token={api_key}",
-    "self_stat_by_token": "/api/log/self/stat?token_name={token_name}",
-    "self_logs_by_token": "/api/log/self?p=1&page_size=100&type=2&token_name={token_name}",
-    "stat": ("/api/log/self/stat", "/api/log/stat"),
-    "logs": ("/api/log/self?p=1&page_size=100&type=2", "/api/log/?p=1&page_size=100&type=2"),
+    "self_stat_by_token": "/api/log/self/stat?type=2&token_name={token_name}&{time_query}",
+    "self_logs_by_token": "/api/log/self?p=1&page_size=100&type=2&token_name={token_name}&{time_query}",
+    "stat": ("/api/log/self/stat?type=2&{time_query}", "/api/log/stat?type=2&{time_query}"),
+    "logs": ("/api/log/self?p=1&page_size=100&type=2&{time_query}", "/api/log/?p=1&page_size=100&type=2&{time_query}"),
 }
 
 
@@ -69,6 +69,7 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     if not config.api_key and not config.access_token:
         return error_result(config, "New API API key or access token is not configured")
     payloads = {}
+    time_query = _today_timestamp_query()
     with httpx.Client(timeout=20) as client:
         if config.access_token:
             account_headers = {
@@ -89,13 +90,13 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
                     payloads["stat"] = _collect_newapi_payload(
                         client,
                         config.base_url,
-                        (NEWAPI_ENDPOINTS["self_stat_by_token"].format(token_name=token_name_param),),
+                        (NEWAPI_ENDPOINTS["self_stat_by_token"].format(token_name=token_name_param, time_query=time_query),),
                         account_headers,
                     )
                     payloads["logs"] = _collect_newapi_payload(
                         client,
                         config.base_url,
-                        (NEWAPI_ENDPOINTS["self_logs_by_token"].format(token_name=token_name_param),),
+                        (NEWAPI_ENDPOINTS["self_logs_by_token"].format(token_name=token_name_param, time_query=time_query),),
                         account_headers,
                     )
             else:
@@ -109,9 +110,19 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
         elif config.access_token and not _is_auth_failure(payloads.get("dashboard", {})):
             for name in ("stat", "logs"):
                 payloads[name] = _collect_newapi_payload(
-                    client, config.base_url, NEWAPI_ENDPOINTS[name], account_headers
+                    client,
+                    config.base_url,
+                    tuple(path.format(time_query=time_query) for path in NEWAPI_ENDPOINTS[name]),
+                    account_headers,
                 )
     return normalize_newapi(config, payloads)
+
+
+def _today_timestamp_query(now: datetime | None = None) -> str:
+    current = now or datetime.now().astimezone()
+    start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = current.replace(hour=23, minute=59, second=59, microsecond=0)
+    return f"start_timestamp={int(start.timestamp())}&end_timestamp={int(end.timestamp())}"
 
 
 def check_model_connection(config: LlmUsageConfig) -> dict[str, str | None]:

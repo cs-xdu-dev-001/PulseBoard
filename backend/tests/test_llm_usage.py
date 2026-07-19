@@ -278,6 +278,11 @@ def test_collect_newapi_uses_user_token_search_when_access_token_is_configured(m
     assert "token=sk-token-key" in search_call[0]
     assert "token_name=codex-key" in stat_call[0]
     assert "token_name=codex-key" in log_call[0]
+    assert "type=2" in stat_call[0]
+    assert "start_timestamp=" in stat_call[0]
+    assert "end_timestamp=" in stat_call[0]
+    assert "start_timestamp=" in log_call[0]
+    assert "end_timestamp=" in log_call[0]
     assert search_call[1]["Authorization"] == "Bearer account-token"
     assert log_call[1]["Authorization"] == "Bearer account-token"
     assert not any("/api/usage/token" in url for url, _headers in requested)

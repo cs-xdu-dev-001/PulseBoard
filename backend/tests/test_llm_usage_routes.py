@@ -223,6 +223,74 @@ def test_llm_usage_aggregates_ignore_unconfigured_database_rows(tmp_path, monkey
     assert [item["source_id"] for item in series["series"]] == ["active-key"]
 
 
+def test_llm_usage_aggregates_can_filter_by_provider_or_key(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PULSEBOARD_LLM_USAGE_SOURCES=academic-main,academic-backup,deepseek-main",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_PROVIDER_NAME=EduModel",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_DISPLAY_NAME=主Key",
+                "PULSEBOARD_LLM_ACADEMIC_MAIN_ACCESS_TOKEN=secret",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_TYPE=newapi_admin",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_PROVIDER_ID=academic",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_PROVIDER_NAME=EduModel",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_DISPLAY_NAME=备用Key",
+                "PULSEBOARD_LLM_ACADEMIC_BACKUP_ACCESS_TOKEN=secret",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_TYPE=deepseek_balance",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_ID=deepseek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_PROVIDER_NAME=DeepSeek",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_DISPLAY_NAME=主Key",
+                "PULSEBOARD_LLM_DEEPSEEK_MAIN_API_KEY=secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.llm_usage.ROOT_DIR", tmp_path)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        sources = [
+            LlmUsageSource(source_id="academic-main", display_name="主Key", source_type="newapi_admin", status="online"),
+            LlmUsageSource(source_id="academic-backup", display_name="备用Key", source_type="newapi_admin", status="online"),
+            LlmUsageSource(source_id="deepseek-main", display_name="主Key", source_type="deepseek_balance", status="online"),
+        ]
+        db.add_all(sources)
+        db.flush()
+        for source, request_count, model in [
+            (sources[0], 100, "gpt-5.5"),
+            (sources[1], 30, "gpt-5.6-sol"),
+            (sources[2], 500, "deepseek-chat"),
+        ]:
+            db.add(
+                LlmUsageSnapshot(
+                    source_id=source.id,
+                    collected_at=now,
+                    range_key="latest",
+                    request_count=request_count,
+                    token_count=request_count * 10,
+                    quota_used=request_count,
+                    estimated_amount=request_count,
+                    model_stats=[{"model": model, "request_count": request_count, "amount": request_count}],
+                    raw_summary={},
+                )
+            )
+        db.commit()
+
+    provider_summary = client.get("/api/llm/usage/summary?range=24h&source=provider:academic").json()
+    provider_series = client.get("/api/llm/usage/series?range=24h&source=provider:academic").json()
+    provider_models = client.get("/api/llm/usage/models?range=24h&source=provider:academic").json()
+    key_summary = client.get("/api/llm/usage/summary?range=24h&source=source:academic-main").json()
+
+    assert provider_summary["request_count"] == 130
+    assert {item["source_id"] for item in provider_series["series"]} == {"academic-main", "academic-backup"}
+    assert {item["model"] for item in provider_models["models"]} == {"gpt-5.5", "gpt-5.6-sol"}
+    assert key_summary["request_count"] == 100
+
+
 def test_llm_usage_summary_and_models_return_aggregates():
     client, session_factory = make_client()
     seed_llm(session_factory)

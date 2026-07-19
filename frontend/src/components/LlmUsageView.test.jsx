@@ -147,6 +147,47 @@ it('New API供应商展开后显示每个Key自己的可用额度', async () => 
   expect(within(backupRow).getByText('$1.9000')).toBeVisible()
 })
 
+it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '主Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+        quota_remaining_usd: 3.2,
+      },
+      {
+        source_id: 'academic-backup',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '备用Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+        quota_remaining_usd: 1.9,
+      },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  const filter = await screen.findByLabelText('来源')
+  expect(within(filter).getByRole('option', { name: 'EduModel（供应商）' })).toBeVisible()
+  expect(within(filter).getByRole('option', { name: '主Key' })).toBeVisible()
+
+  fireEvent.change(filter, { target: { value: 'provider:academic' } })
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'provider:academic'))
+  expect(fetchLlmSeries).toHaveBeenLastCalledWith('today', 'provider:academic')
+  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'provider:academic')
+
+  fireEvent.change(filter, { target: { value: 'source:academic-main' } })
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'source:academic-main'))
+  expect(fetchLlmSeries).toHaveBeenLastCalledWith('today', 'source:academic-main')
+  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'source:academic-main')
+})
+
 it('LLM看板按New API风格展示活动热力图和模型分析视图', async () => {
   fetchLlmSummary.mockResolvedValue({
     estimated_cost_usd: 12.34,

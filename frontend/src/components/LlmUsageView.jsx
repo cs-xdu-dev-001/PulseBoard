@@ -91,8 +91,9 @@ export function LlmUsageView({ theme = 'dark' }) {
             <option value="">全部来源</option>
             {sourceGroups.map((group) => (
               <optgroup key={group.provider_id} label={group.provider_name}>
+                <option value={`provider:${group.provider_id}`}>{group.provider_name}（供应商）</option>
                 {group.items.map((item) => (
-                  <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
+                  <option key={item.source_id} value={`source:${item.source_id}`}>{item.display_name}</option>
                 ))}
               </optgroup>
             ))}
@@ -118,7 +119,8 @@ export function LlmUsageView({ theme = 'dark' }) {
             activeSource={source}
             expanded={expandedProviders[group.provider_id]}
             onToggle={() => setExpandedProviders((current) => ({ ...current, [group.provider_id]: !current[group.provider_id] }))}
-            onSelectKey={(sourceId) => setSource(sourceId)}
+            onSelectProvider={(providerId) => setSource(`provider:${providerId}`)}
+            onSelectKey={(sourceId) => setSource(`source:${sourceId}`)}
           />
         ))}
         {sources.length === 0 && <div className="empty-panel">暂无LLM来源数据，请先在Settings配置并手动刷新。</div>}
@@ -311,12 +313,19 @@ function EChart({ option, className }) {
   return <div ref={ref} className={`chart ${className}`} />
 }
 
-function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) {
-  const active = group.items.some((item) => item.source_id === activeSource)
+function ProviderCard({ group, activeSource, expanded, onToggle, onSelectProvider, onSelectKey }) {
+  const providerValue = `provider:${group.provider_id}`
+  const active = activeSource === providerValue || group.items.some((item) => `source:${item.source_id}` === activeSource)
   const status = aggregateStatus(group.items)
   const open = expanded || active
   return (
-    <article className={`llm-source-card llm-provider-card ${active ? 'active' : ''}`} onClick={onToggle}>
+    <article
+      className={`llm-source-card llm-provider-card ${active ? 'active' : ''}`}
+      onClick={() => {
+        onSelectProvider(group.provider_id)
+        if (!open) onToggle()
+      }}
+    >
       <div className="llm-source-top">
         <div>
           <span className="chip">{group.items.length} keys</span>
@@ -343,7 +352,7 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) 
             <button
               type="button"
               key={item.source_id}
-              className={`llm-key-row ${activeSource === item.source_id ? 'active' : ''}`}
+              className={`llm-key-row ${activeSource === `source:${item.source_id}` ? 'active' : ''}`}
               onClick={(event) => {
                 event.stopPropagation()
                 onSelectKey(item.source_id)
@@ -361,7 +370,7 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) 
         </div>
       )}
       {group.items.some((item) => item.last_error) && <p className="error-text">{group.items.find((item) => item.last_error)?.last_error}</p>}
-      <footer>{open ? '点击卡片收起' : '点击卡片查看Key'}</footer>
+      <footer>{open ? '已按供应商汇总，点Key查看令牌' : '点击卡片按供应商汇总'}</footer>
     </article>
   )
 }

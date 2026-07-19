@@ -336,7 +336,8 @@ def llm_usage_summary(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    snapshots = _latest_llm_snapshots(db, range, source, _configured_llm_source_ids())
+    source_id, configured_source_ids = _llm_source_selection(source)
+    snapshots = _latest_llm_snapshots(db, range, source_id, configured_source_ids)
     request_count = sum(point.request_count or 0 for point in snapshots)
     token_count = sum(point.token_count or 0 for point in snapshots)
     amount = sum(point.estimated_amount or 0 for point in snapshots)
@@ -365,11 +366,12 @@ def llm_usage_series(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
+    source_id, configured_source_ids = _llm_source_selection(source)
     rows = _llm_snapshot_rows(
         db,
         range,
-        source,
-        _configured_llm_source_ids(),
+        source_id,
+        configured_source_ids,
         per_source_limit=_llm_series_point_limit(range),
     )
     series_by_source: dict[int, dict] = {}
@@ -433,7 +435,8 @@ def llm_usage_models(
     db: Session = Depends(get_db),
 ) -> dict:
     totals: dict[str, dict] = {}
-    for snapshot in _latest_llm_snapshots(db, range, source, _configured_llm_source_ids()):
+    source_id, configured_source_ids = _llm_source_selection(source)
+    for snapshot in _latest_llm_snapshots(db, range, source_id, configured_source_ids):
         for item in snapshot.model_stats or []:
             model = item.get("model") or "unknown"
             total = totals.setdefault(
@@ -604,6 +607,19 @@ def _llm_range_bounds(range_value: str) -> tuple[datetime, datetime]:
 
 def _configured_llm_source_ids() -> list[str]:
     return [config["source_id"] for config in list_llm_usage_config(get_settings())]
+
+
+def _llm_source_selection(selection: str | None) -> tuple[str | None, list[str]]:
+    config_items = list_llm_usage_config(get_settings())
+    configured_source_ids = [config["source_id"] for config in config_items]
+    if not selection:
+        return None, configured_source_ids
+    if selection.startswith("provider:"):
+        provider_id = selection.split(":", 1)[1]
+        return None, [config["source_id"] for config in config_items if config.get("provider_id") == provider_id]
+    if selection.startswith("source:"):
+        return selection.split(":", 1)[1], configured_source_ids
+    return selection, configured_source_ids
 
 
 def _llm_source_rows(
