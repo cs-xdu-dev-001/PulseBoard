@@ -31,6 +31,14 @@ def estimate_model_cost_usd(
     input_count = _number(input_tokens)
     output_count = _number(output_tokens)
     total_count = _number(token_count)
+    quota = _number(raw_quota)
+
+    if quota is not None:
+        return {
+            "estimated_cost_usd": round(quota / NEWAPI_QUOTA_PER_USD, 6),
+            "pricing_basis": "newapi_quota",
+            "pricing_model": normalized,
+        }
 
     if pricing and (input_count is not None or output_count is not None or total_count is not None):
         if input_count is None and output_count is None:
@@ -43,14 +51,6 @@ def estimate_model_cost_usd(
             "pricing_model": normalized,
             "input_price_per_1m": pricing[0],
             "output_price_per_1m": pricing[1],
-        }
-
-    quota = _number(raw_quota)
-    if quota is not None:
-        return {
-            "estimated_cost_usd": round(quota / NEWAPI_QUOTA_PER_USD, 6),
-            "pricing_basis": "newapi_quota",
-            "pricing_model": normalized,
         }
 
     return {

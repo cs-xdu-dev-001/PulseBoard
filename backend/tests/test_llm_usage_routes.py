@@ -301,13 +301,13 @@ def test_llm_usage_summary_and_models_return_aggregates():
     assert summary["request_count"] == 10
     assert summary["token_count"] == 2000
     assert summary["avg_rpm"] == 0.5
-    assert summary["estimated_cost_usd"] == 2.0
+    assert summary["estimated_cost_usd"] == 0.000024
     assert models["models"][0]["model"] == "gpt-4.1-mini"
     assert models["models"][0]["amount"] == 12
-    assert models["models"][0]["estimated_cost_usd"] == 2.0
+    assert models["models"][0]["estimated_cost_usd"] == 0.000024
 
 
-def test_llm_usage_summary_prefers_model_cost_over_raw_newapi_quota():
+def test_llm_usage_summary_prefers_newapi_official_quota_amount():
     client, session_factory = make_client()
     now = datetime.now(timezone.utc)
     with session_factory() as db:
@@ -356,7 +356,7 @@ def test_llm_usage_series_includes_model_area_series():
     payload = client.get("/api/llm/usage/series?range=24h").json()
 
     assert payload["model_series"][0]["model"] == "gpt-4.1-mini"
-    assert payload["model_series"][0]["points"][0]["estimated_cost_usd"] == 2.0
+    assert payload["model_series"][0]["points"][0]["estimated_cost_usd"] == 0.000024
     assert payload["model_series"][0]["points"][0]["request_count"] == 10
     assert payload["model_series"][0]["points"][0]["source_id"] == "academic"
 

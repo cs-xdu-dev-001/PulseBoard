@@ -714,6 +714,18 @@ def test_newapi_quota_falls_back_to_usd_when_tokens_are_missing():
     assert result["pricing_basis"] == "newapi_quota"
 
 
+def test_newapi_quota_is_preferred_over_openai_token_estimate():
+    result = estimate_model_cost_usd(
+        "gpt-4.1-mini",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        raw_quota=1_000_000,
+    )
+
+    assert result["estimated_cost_usd"] == 2.0
+    assert result["pricing_basis"] == "newapi_quota"
+
+
 def test_save_llm_usage_config_writes_env_without_echoing_secret(tmp_path, monkeypatch):
     env_path = tmp_path / "test.env"
     env_path.write_text("PULSEBOARD_LLM_USAGE_SOURCES=academic\n", encoding="utf-8")

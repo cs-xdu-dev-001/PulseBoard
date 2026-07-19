@@ -103,7 +103,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       </div>
 
       <div className="llm-kpi-grid">
-        <Kpi label="估算费用" value={formatUsd(summary?.estimated_cost_usd)} hint="按当前计价规则折算" highlight />
+        <Kpi label="官方消耗" value={formatUsd(summary?.estimated_cost_usd)} hint="优先采用供应商统计" highlight />
         <Kpi label="总请求数" value={formatNumber(summary?.request_count)} hint="统计周期内调用" />
         <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="供应商账户去重" />
         <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
@@ -393,7 +393,7 @@ function ModelTable({ models }) {
         <thead>
           <tr>
             <th>模型</th>
-            <th>估算费用</th>
+            <th>消耗金额</th>
             <th>调用数</th>
             <th>原始额度</th>
             <th>计价依据</th>
@@ -899,7 +899,7 @@ function statusText(status) {
 }
 
 function basisText(value) {
-  return { openai_tokens: 'OpenAI单价', newapi_quota: 'New API折算', unknown: '未知' }[value] || value || '--'
+  return { openai_tokens: 'OpenAI参考价', newapi_quota: 'NewAPI官方', unknown: '未知' }[value] || value || '--'
 }
 
 function formatPercentFromHundred(value) {
