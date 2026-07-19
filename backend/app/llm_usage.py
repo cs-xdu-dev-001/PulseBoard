@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from threading import RLock
@@ -565,6 +566,7 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
             "stat": _safe_summary(stat),
             "logs": _safe_summary(logs),
             "channels": _safe_summary(channels),
+            "newapi": {"buckets": _newapi_log_buckets(token_logs or logs)},
         },
         error=errors[0] if errors else None,
     )
@@ -808,6 +810,104 @@ def _model_rows(value: Any) -> list[dict[str, Any]]:
             rows.append(value)
         return rows
     return []
+
+
+def _newapi_log_buckets(value: Any) -> list[dict[str, Any]]:
+    rows = _model_rows(value)
+    if not rows:
+        return []
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        timestamp = _log_item_timestamp(item)
+        model = item.get("model") or item.get("model_name")
+        if timestamp is None or not model:
+            continue
+        key = (timestamp, str(model))
+        bucket = grouped.setdefault(
+            key,
+            {
+                "timestamp": timestamp,
+                "model": str(model),
+                "request_count": 0,
+                "token_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "amount": 0,
+            },
+        )
+        request_count = _coalesce_number(_number_from_keys(item, ["count", "request_count", "total_count"]), 1)
+        input_tokens = _number_from_keys(item, ["input_tokens", "prompt_tokens"])
+        output_tokens = _number_from_keys(item, ["output_tokens", "completion_tokens"])
+        token_count = _number_from_keys(item, ["token", "tokens", "token_count", "total_tokens", "total_token"])
+        if token_count is None and (input_tokens is not None or output_tokens is not None):
+            token_count = (input_tokens or 0) + (output_tokens or 0)
+        bucket["request_count"] += request_count or 0
+        bucket["token_count"] += token_count or 0
+        bucket["input_tokens"] += input_tokens or 0
+        bucket["output_tokens"] += output_tokens or 0
+        bucket["amount"] += _number_from_keys(item, ["amount", "quota", "used_quota", "cost", "price"]) or 0
+    result = []
+    for bucket in grouped.values():
+        estimate = estimate_model_cost_usd(
+            bucket["model"],
+            input_tokens=bucket["input_tokens"] or None,
+            output_tokens=bucket["output_tokens"] or None,
+            token_count=bucket["token_count"] or None,
+            raw_quota=bucket["amount"] or None,
+        )
+        result.append(
+            {
+                **bucket,
+                "request_count": _round_number(bucket["request_count"]),
+                "token_count": _round_number(bucket["token_count"]),
+                "input_tokens": _round_number(bucket["input_tokens"]),
+                "output_tokens": _round_number(bucket["output_tokens"]),
+                "amount": _round_number(bucket["amount"]),
+                "estimated_cost_usd": estimate["estimated_cost_usd"],
+                "pricing_basis": estimate["pricing_basis"],
+            }
+        )
+    return sorted(result, key=lambda item: (item["timestamp"], item["model"]))
+
+
+def _log_item_timestamp(item: dict[str, Any]) -> str | None:
+    value = None
+    for key in ("created_at", "created_time", "createdAt", "timestamp", "time"):
+        if item.get(key) not in (None, ""):
+            value = item.get(key)
+            break
+    if value in (None, ""):
+        return None
+    parsed = _parse_log_datetime(value)
+    if parsed is None:
+        return None
+    bucket = parsed.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return bucket.isoformat()
+
+
+def _parse_log_datetime(value: Any) -> datetime | None:
+    number = _to_float(value)
+    if number is not None:
+        if number > 10_000_000_000:
+            number = number / 1000
+        try:
+            return datetime.fromtimestamp(number, timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
 
 
 def _deepseek_platform_amount_series(payload: Any) -> list[dict[str, Any]]:

@@ -384,8 +384,15 @@ def llm_usage_series(
     )
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
+    latest_bucket_snapshot_ids = _latest_newapi_bucket_snapshot_ids(rows)
     for row, source_row in rows:
         if source_row.source_type == "deepseek_balance":
+            continue
+        newapi_buckets = _newapi_snapshot_buckets(row)
+        if newapi_buckets and latest_bucket_snapshot_ids.get(source_row.id) == row.id:
+            _append_newapi_bucket_series(series_by_source, series_by_model, row, source_row, newapi_buckets)
+            continue
+        if newapi_buckets:
             continue
         item = series_by_source.setdefault(
             source_row.id,
@@ -796,6 +803,91 @@ def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
     if snapshot.estimated_amount is not None and (snapshot.raw_summary or {}).get("token_usage"):
         return snapshot.estimated_amount
     return model_cost
+
+
+def _latest_newapi_bucket_snapshot_ids(rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]]) -> dict[int, int]:
+    latest: dict[int, tuple[datetime, int]] = {}
+    for row, source_row in rows:
+        if source_row.source_type != "newapi_admin" or not _newapi_snapshot_buckets(row):
+            continue
+        current = latest.get(source_row.id)
+        value = (row.collected_at, row.id)
+        if current is None or value > current:
+            latest[source_row.id] = value
+    return {source_id: snapshot_id for source_id, (_collected_at, snapshot_id) in latest.items()}
+
+
+def _newapi_snapshot_buckets(snapshot: LlmUsageSnapshot) -> list[dict]:
+    newapi = (snapshot.raw_summary or {}).get("newapi")
+    buckets = newapi.get("buckets") if isinstance(newapi, dict) else None
+    return buckets if isinstance(buckets, list) else []
+
+
+def _append_newapi_bucket_series(
+    series_by_source: dict[int, dict],
+    series_by_model: dict[str, dict],
+    snapshot: LlmUsageSnapshot,
+    source_row: LlmUsageSource,
+    buckets: list[dict],
+) -> None:
+    item = series_by_source.setdefault(
+        source_row.id,
+        {
+            "source_id": source_row.source_id,
+            "display_name": source_row.display_name,
+            "source_type": source_row.source_type,
+            "points": [],
+        },
+    )
+    source_totals: dict[str, dict] = {}
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        timestamp = bucket.get("timestamp")
+        if not timestamp:
+            continue
+        source_total = source_totals.setdefault(
+            str(timestamp),
+            {
+                "timestamp": str(timestamp),
+                "request_count": 0,
+                "token_count": 0,
+                "quota_used": 0,
+                "estimated_amount": 0,
+                "estimated_cost_usd": 0,
+                "rpm": snapshot.rpm,
+                "tpm": snapshot.tpm,
+            },
+        )
+        amount = bucket.get("amount") or 0
+        estimated_cost = bucket.get("estimated_cost_usd") or 0
+        source_total["request_count"] += bucket.get("request_count") or 0
+        source_total["token_count"] += bucket.get("token_count") or 0
+        source_total["quota_used"] += amount
+        source_total["estimated_amount"] += amount
+        source_total["estimated_cost_usd"] += estimated_cost
+
+        model = bucket.get("model") or "unknown"
+        model_series = series_by_model.setdefault(str(model), {"model": str(model), "display_name": str(model), "points": []})
+        model_series["points"].append(
+            {
+                "timestamp": str(timestamp),
+                "source_id": source_row.source_id,
+                "request_count": bucket.get("request_count") or 0,
+                "amount": amount,
+                "estimated_cost_usd": estimated_cost,
+                "pricing_basis": bucket.get("pricing_basis") or "newapi_quota",
+            }
+        )
+    item["points"].extend(
+        {
+            **point,
+            "quota_used": round(point["quota_used"], 6),
+            "estimated_amount": round(point["estimated_amount"], 6),
+            "estimated_cost_usd": round(point["estimated_cost_usd"], 6),
+        }
+        for _timestamp, point in sorted(source_totals.items())
+    )
 
 
 def _llm_usage_capability(source_rows: list[LlmUsageSource]) -> dict:

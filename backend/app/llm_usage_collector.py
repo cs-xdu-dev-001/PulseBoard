@@ -28,10 +28,15 @@ NEWAPI_ENDPOINTS = {
     "token_logs": ("/api/log/token",),
     "token_search": "/api/token/search?p=1&page_size=1&token={api_key}",
     "self_stat_by_token": "/api/log/self/stat?type=2&token_name={token_name}&{time_query}",
-    "self_logs_by_token": "/api/log/self?p=1&page_size=100&type=2&token_name={token_name}&{time_query}",
+    "self_logs_by_token": "/api/log/self?p={page}&page_size={page_size}&type=2&token_name={token_name}&{time_query}",
     "stat": ("/api/log/self/stat?type=2&{time_query}", "/api/log/stat?type=2&{time_query}"),
-    "logs": ("/api/log/self?p=1&page_size=100&type=2&{time_query}", "/api/log/?p=1&page_size=100&type=2&{time_query}"),
+    "logs": (
+        "/api/log/self?p={page}&page_size={page_size}&type=2&{time_query}",
+        "/api/log/?p={page}&page_size={page_size}&type=2&{time_query}",
+    ),
 }
+NEWAPI_LOG_PAGE_SIZE = 1000
+NEWAPI_LOG_MAX_PAGES = 20
 DEEPSEEK_PLATFORM_BASE_URL = "https://platform.deepseek.com"
 DEEPSEEK_PLATFORM_ENDPOINTS = {
     "amount": "/api/v0/usage/by_api_key/amount?start={start}&end={end}&tz=0",
@@ -151,10 +156,17 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
                         (NEWAPI_ENDPOINTS["self_stat_by_token"].format(token_name=token_name_param, time_query=time_query),),
                         account_headers,
                     )
-                    payloads["logs"] = _collect_newapi_payload(
+                    payloads["logs"] = _collect_newapi_paginated_payload(
                         client,
                         config.base_url,
-                        (NEWAPI_ENDPOINTS["self_logs_by_token"].format(token_name=token_name_param, time_query=time_query),),
+                        (
+                            NEWAPI_ENDPOINTS["self_logs_by_token"].format(
+                                token_name=token_name_param,
+                                time_query=time_query,
+                                page="{page}",
+                                page_size="{page_size}",
+                            ),
+                        ),
                         account_headers,
                     )
             else:
@@ -167,12 +179,23 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
                 )
         elif config.access_token and not _is_auth_failure(payloads.get("dashboard", {})):
             for name in ("stat", "logs"):
-                payloads[name] = _collect_newapi_payload(
-                    client,
-                    config.base_url,
-                    tuple(path.format(time_query=time_query) for path in NEWAPI_ENDPOINTS[name]),
-                    account_headers,
-                )
+                if name == "logs":
+                    payloads[name] = _collect_newapi_paginated_payload(
+                        client,
+                        config.base_url,
+                        tuple(
+                            path.format(time_query=time_query, page="{page}", page_size="{page_size}")
+                            for path in NEWAPI_ENDPOINTS[name]
+                        ),
+                        account_headers,
+                    )
+                else:
+                    payloads[name] = _collect_newapi_payload(
+                        client,
+                        config.base_url,
+                        tuple(path.format(time_query=time_query) for path in NEWAPI_ENDPOINTS[name]),
+                        account_headers,
+                    )
     return normalize_newapi(config, payloads)
 
 
@@ -307,6 +330,94 @@ def _collect_newapi_payload(client: httpx.Client, base_url: str, paths: tuple[st
         except Exception as exc:
             last_error = _sanitize_newapi_error(str(exc), headers)
     return {"_error": last_error or "New API request failed"}
+
+
+def _collect_newapi_paginated_payload(
+    client: httpx.Client,
+    base_url: str,
+    paths: tuple[str, ...],
+    headers: dict[str, str],
+) -> dict:
+    last_error = None
+    for path_template in paths:
+        try:
+            return _collect_newapi_paginated_path(client, base_url, path_template, headers)
+        except Exception as exc:
+            last_error = _sanitize_newapi_error(str(exc), headers)
+    return {"_error": last_error or "New API request failed"}
+
+
+def _collect_newapi_paginated_path(
+    client: httpx.Client,
+    base_url: str,
+    path_template: str,
+    headers: dict[str, str],
+) -> dict:
+    first_payload: dict | None = None
+    combined_items: list[dict] = []
+    total = None
+    collected_pages = 0
+    for page in range(1, NEWAPI_LOG_MAX_PAGES + 1):
+        path = path_template.format(page=page, page_size=NEWAPI_LOG_PAGE_SIZE)
+        response = client.get(newapi_url(base_url, path), headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("success") is False:
+            raise RuntimeError(str(payload.get("message") or "New API request failed"))
+        if isinstance(payload, dict) and payload.get("code") is False:
+            raise RuntimeError(str(payload.get("message") or "New API request failed"))
+        if first_payload is None:
+            first_payload = payload if isinstance(payload, dict) else {"data": payload}
+        data = _newapi_data(payload)
+        if total is None:
+            total = _number(data.get("total")) if isinstance(data, dict) else None
+        items = _newapi_items(data)
+        combined_items.extend(items)
+        collected_pages = page
+        if not items:
+            break
+        if total is not None and len(combined_items) >= total:
+            break
+        if len(items) < NEWAPI_LOG_PAGE_SIZE:
+            break
+
+    if first_payload is None:
+        return {"success": True, "data": {"items": []}}
+    result = dict(first_payload)
+    data = _newapi_data(result)
+    if isinstance(data, dict):
+        next_data = dict(data)
+        next_data["items"] = combined_items
+        next_data["page"] = 1
+        next_data["page_size"] = NEWAPI_LOG_PAGE_SIZE
+        next_data["pages_collected"] = collected_pages
+        if total is not None:
+            next_data["total"] = total
+        if total is not None and len(combined_items) < total:
+            next_data["truncated"] = True
+        result["data"] = next_data
+    else:
+        result["data"] = combined_items
+    return result
+
+
+def _newapi_data(payload) -> dict | list:
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, (dict, list)):
+            return data
+    return payload if isinstance(payload, list) else {}
+
+
+def _newapi_items(data) -> list[dict]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("items", "logs", "rows", "records", "list", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 def _collect_deepseek_platform_payload(client: httpx.Client, url: str, headers: dict[str, str]) -> dict:

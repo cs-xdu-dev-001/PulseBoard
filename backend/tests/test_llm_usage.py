@@ -310,6 +310,50 @@ def test_normalize_newapi_derives_usage_from_user_log_items():
     assert result.model_stats[0]["estimated_cost_usd"] == 0.041336
 
 
+def test_normalize_newapi_builds_hourly_buckets_from_log_timestamps():
+    result = normalize_newapi(
+        LlmUsageConfig("academic-main", "Codex", "newapi_admin", base_url="https://example", access_token="secret"),
+        {
+            "logs": {
+                "success": True,
+                "data": {
+                    "items": [
+                        {
+                            "created_at": 1784447751,
+                            "model_name": "gpt-5.5",
+                            "prompt_tokens": 100,
+                            "completion_tokens": 50,
+                            "quota": 5000,
+                        },
+                        {
+                            "created_at": 1784447999,
+                            "model_name": "gpt-5.5",
+                            "prompt_tokens": 80,
+                            "completion_tokens": 20,
+                            "quota": 3000,
+                        },
+                    ]
+                },
+            }
+        },
+    )
+
+    buckets = result.raw_summary["newapi"]["buckets"]
+    assert buckets == [
+        {
+            "timestamp": "2026-07-19T07:00:00+00:00",
+            "model": "gpt-5.5",
+            "request_count": 2,
+            "token_count": 250,
+            "input_tokens": 180,
+            "output_tokens": 70,
+            "amount": 8000,
+            "estimated_cost_usd": 0.016,
+            "pricing_basis": "newapi_quota",
+        }
+    ]
+
+
 def test_collect_newapi_uses_user_scoped_log_endpoints(monkeypatch):
     requested_urls = []
 
@@ -479,6 +523,84 @@ def test_collect_newapi_uses_user_token_search_when_access_token_is_configured(m
     assert result.request_count == 2
     assert result.token_count == 250
     assert [item["model"] for item in result.model_stats] == ["gpt-5.6-sol", "deepseek-chat"]
+
+
+def test_collect_newapi_paginates_user_scoped_logs(monkeypatch):
+    requested = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "/api/user/self" in self.url:
+                return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
+            if "/api/token/search" in self.url:
+                return {
+                    "success": True,
+                    "data": {"items": [{"name": "codex-key", "used_quota": 500_000, "remain_quota": 1_500_000}]},
+                }
+            if "/api/log/self/stat" in self.url:
+                return {"success": True, "data": {"quota": 500_000}}
+            if "/api/log/self" in self.url:
+                page = 2 if "p=2" in self.url else 1
+                count = 1 if page == 2 else 1000
+                return {
+                    "success": True,
+                    "data": {
+                        "page": page,
+                        "page_size": 1000,
+                        "total": 1001,
+                        "items": [
+                            {
+                                "model_name": "gpt-5.5",
+                                "prompt_tokens": 1,
+                                "completion_tokens": 0,
+                                "quota": 500,
+                            }
+                            for _index in range(count)
+                        ],
+                    },
+                }
+            return {"success": True, "data": []}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested.append(url)
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig(
+            "academic-main",
+            "Codex",
+            "newapi_admin",
+            base_url="https://example",
+            api_key="sk-token-key",
+            access_token="account-token",
+        )
+    )
+
+    log_urls = [url for url in requested if "/api/log/self" in url and "/stat" not in url]
+    assert any("p=1" in url and "page_size=1000" in url for url in log_urls)
+    assert any("p=2" in url and "page_size=1000" in url for url in log_urls)
+    assert result.request_count == 1001
+    assert result.token_count == 1001
+    assert result.model_stats[0]["request_count"] == 1001
+    assert result.model_stats[0]["amount"] == 500_500
 
 
 def test_collect_newapi_key_usage_differs_per_api_key(monkeypatch):
