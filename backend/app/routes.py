@@ -26,7 +26,8 @@ from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSou
 from app.settings_config import load_app_settings, save_app_settings
 
 router = APIRouter(prefix="/api")
-LLM_SERIES_POINTS_PER_SOURCE = {"today": 288, "24h": 288, "7d": 672}
+LlmRange = Literal["today", "24h", "7d", "14d", "29d"]
+LLM_SERIES_POINTS_PER_SOURCE = {"today": 288, "24h": 288, "7d": 2016, "14d": 4032, "29d": 8352}
 
 
 class LlmUsageConfigPayload(BaseModel):
@@ -330,7 +331,7 @@ def llm_usage_sources(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/llm/usage/summary")
 def llm_usage_summary(
-    range: Literal["today", "24h", "7d"] = Query("today"),
+    range: LlmRange = Query("today"),
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -342,6 +343,7 @@ def llm_usage_summary(
     rpm_values = [point.rpm for point in snapshots if point.rpm is not None]
     tpm_values = [point.tpm for point in snapshots if point.tpm is not None]
     latency_values = [point.avg_latency_seconds for point in snapshots if point.avg_latency_seconds is not None]
+    success_values = [point.success_rate for point in snapshots if point.success_rate is not None]
     return {
         "range": range,
         "request_count": request_count,
@@ -351,13 +353,14 @@ def llm_usage_summary(
         "avg_rpm": round(sum(rpm_values) / len(rpm_values), 4) if rpm_values else None,
         "avg_tpm": round(sum(tpm_values) / len(tpm_values), 4) if tpm_values else None,
         "avg_latency_seconds": round(sum(latency_values) / len(latency_values), 4) if latency_values else None,
+        "success_rate": round(sum(success_values) / len(success_values), 4) if success_values else None,
         "snapshot_count": len(snapshots),
     }
 
 
 @router.get("/llm/usage/series")
 def llm_usage_series(
-    range: Literal["today", "24h", "7d"] = Query("today"),
+    range: LlmRange = Query("today"),
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -404,6 +407,7 @@ def llm_usage_series(
             model_series["points"].append(
                 {
                     "timestamp": _iso(row.collected_at),
+                    "source_id": source_row.source_id,
                     "request_count": model_item.get("request_count") or 0,
                     "amount": model_item.get("amount") or 0,
                     "estimated_cost_usd": estimate["estimated_cost_usd"],
@@ -423,7 +427,7 @@ def llm_usage_series(
 
 @router.get("/llm/usage/models")
 def llm_usage_models(
-    range: Literal["today", "24h", "7d"] = Query("today"),
+    range: LlmRange = Query("today"),
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -590,6 +594,10 @@ def _llm_range_bounds(range_value: str) -> tuple[datetime, datetime]:
         return local_start.astimezone(timezone.utc), until
     if range_value == "7d":
         return until - timedelta(days=7), until
+    if range_value == "14d":
+        return until - timedelta(days=14), until
+    if range_value == "29d":
+        return until - timedelta(days=29), until
     return until - timedelta(hours=24), until
 
 
@@ -687,13 +695,16 @@ def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = Non
 
 
 def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
-    if snapshot.estimated_amount is not None and (snapshot.raw_summary or {}).get("token_usage"):
-        return snapshot.estimated_amount
-    return estimate_snapshot_cost_usd(
+    model_cost = estimate_snapshot_cost_usd(
         model_stats=snapshot.model_stats or [],
         token_count=snapshot.token_count,
         raw_quota=snapshot.quota_used,
     )
+    if snapshot.model_stats and model_cost is not None:
+        return model_cost
+    if snapshot.estimated_amount is not None and (snapshot.raw_summary or {}).get("token_usage"):
+        return snapshot.estimated_amount
+    return model_cost
 
 
 def _iso(value: datetime | None) -> str | None:

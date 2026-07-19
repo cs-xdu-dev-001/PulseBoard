@@ -76,7 +76,20 @@ def seed_llm(session_factory):
         db.commit()
 
 
-def test_llm_usage_sources_do_not_expose_secrets():
+def test_llm_usage_sources_do_not_expose_secrets(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "academic",
+                "provider_id": "academic",
+                "provider_name": "Academic Gateway",
+                "display_name": "Academic Gateway",
+                "source_type": "newapi_admin",
+            }
+        ],
+    )
     client, session_factory = make_client()
     seed_llm(session_factory)
 
@@ -226,6 +239,48 @@ def test_llm_usage_summary_and_models_return_aggregates():
     assert models["models"][0]["estimated_cost_usd"] == 2.0
 
 
+def test_llm_usage_summary_prefers_model_cost_over_raw_newapi_quota():
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+            last_checked_at=now,
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                request_count=10,
+                token_count=2000,
+                quota_used=3_282_920_000,
+                estimated_amount=6565.84,
+                model_stats=[
+                    {
+                        "model": "gpt-5.5",
+                        "request_count": 10,
+                        "token_count": 2000,
+                        "amount": 5_543_995,
+                    }
+                ],
+                raw_summary={"token_usage": {"total_used": 3_282_920_000}},
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=24h").json()
+    series = client.get("/api/llm/usage/series?range=24h").json()
+
+    assert summary["estimated_cost_usd"] == 11.08799
+    assert series["series"][0]["points"][0]["estimated_cost_usd"] == 11.08799
+
+
 def test_llm_usage_series_includes_model_area_series():
     client, session_factory = make_client()
     seed_llm(session_factory)
@@ -235,6 +290,7 @@ def test_llm_usage_series_includes_model_area_series():
     assert payload["model_series"][0]["model"] == "gpt-4.1-mini"
     assert payload["model_series"][0]["points"][0]["estimated_cost_usd"] == 2.0
     assert payload["model_series"][0]["points"][0]["request_count"] == 10
+    assert payload["model_series"][0]["points"][0]["source_id"] == "academic"
 
 
 def test_llm_usage_series_limits_points_per_source():
@@ -270,6 +326,20 @@ def test_llm_usage_series_limits_points_per_source():
     assert len(payload["series"][0]["points"]) == 288
     assert len(payload["model_series"][0]["points"]) == 288
     assert payload["series"][0]["points"][0]["request_count"] == 32
+
+
+def test_llm_usage_routes_accept_newapi_style_long_ranges():
+    client, session_factory = make_client()
+    seed_llm(session_factory)
+
+    for range_value in ("14d", "29d"):
+        summary = client.get(f"/api/llm/usage/summary?range={range_value}")
+        series = client.get(f"/api/llm/usage/series?range={range_value}")
+        models = client.get(f"/api/llm/usage/models?range={range_value}")
+
+        assert summary.status_code == 200
+        assert series.status_code == 200
+        assert models.status_code == 200
 
 
 def test_save_llm_usage_config_returns_422_detail(monkeypatch):

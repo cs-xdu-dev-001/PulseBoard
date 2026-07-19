@@ -4,11 +4,12 @@ import { fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refre
 
 const ranges = [
   { value: 'today', label: '今天' },
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
+  { value: '7d', label: '7天' },
+  { value: '14d', label: '14天' },
+  { value: '29d', label: '29天' },
 ]
 
-const modelColors = ['#7c3aed', '#22c55e', '#f97316', '#38bdf8', '#2563eb', '#f43f5e']
+const modelColors = ['#22c55e', '#f97316', '#38bdf8', '#2563eb', '#8b5cf6', '#f43f5e', '#14b8a6', '#eab308']
 
 export function LlmUsageView({ theme = 'dark' }) {
   const [range, setRange] = useState('today')
@@ -18,6 +19,9 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [series, setSeries] = useState(null)
   const [models, setModels] = useState([])
   const [expandedProviders, setExpandedProviders] = useState({})
+  const [costChartMode, setCostChartMode] = useState('bar')
+  const [modelView, setModelView] = useState('trend')
+  const [granularity, setGranularity] = useState('day')
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
 
@@ -45,6 +49,10 @@ export function LlmUsageView({ theme = 'dark' }) {
     return () => clearInterval(timer)
   }, [range, source])
 
+  useEffect(() => {
+    if (range !== 'today' && granularity === 'hour') setGranularity('day')
+  }, [range, granularity])
+
   async function handleRefresh() {
     setRefreshing(true)
     try {
@@ -59,38 +67,48 @@ export function LlmUsageView({ theme = 'dark' }) {
 
   const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
   const totalBalance = useMemo(() => totalProviderBalance(sourceGroups), [sourceGroups])
+  const topModel = models[0]?.model || '--'
 
   return (
     <section className="llm-view">
-      {error && <section className="notice danger">LLM 数据请求失败：{error}</section>}
+      {error && <section className="notice danger">LLM数据请求失败：{error}</section>}
 
       <div className="llm-toolbar">
-        <div className="segmented">
+        <div className="segmented" aria-label="统计范围">
           {ranges.map((item) => (
             <button key={item.value} className={range === item.value ? 'active' : ''} onClick={() => setRange(item.value)}>
               {item.label}
             </button>
           ))}
         </div>
-        <select value={source} onChange={(event) => setSource(event.target.value)}>
-          <option value="">全部来源</option>
-          {sourceGroups.map((group) => (
-            <optgroup key={group.provider_id} label={group.provider_name}>
-              {group.items.map((item) => (
-                <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <div className="segmented compact-segmented" aria-label="时间粒度">
+          <button className={granularity === 'day' ? 'active' : ''} onClick={() => setGranularity('day')}>日</button>
+          <button className={granularity === 'hour' ? 'active' : ''} onClick={() => setGranularity('hour')} disabled={range !== 'today'}>小时</button>
+        </div>
+        <label className="llm-filter-control">
+          <span>来源</span>
+          <select value={source} onChange={(event) => setSource(event.target.value)}>
+            <option value="">全部来源</option>
+            {sourceGroups.map((group) => (
+              <optgroup key={group.provider_id} label={group.provider_name}>
+                {group.items.map((item) => (
+                  <option key={item.source_id} value={item.source_id}>{item.display_name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
         <button className="glow-button" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '刷新中' : '手动刷新'}</button>
       </div>
 
       <div className="llm-kpi-grid">
-        <Kpi label="估算费用" value={formatUsd(summary?.estimated_cost_usd)} hint="OpenAI 单价 / New API 折算" highlight />
-        <Kpi label="总请求数" value={formatNumber(summary?.request_count)} hint="统计周期内请求" />
-        <Kpi label="平均 RPM" value={formatDecimal(summary?.avg_rpm)} hint="每分钟请求" />
-        <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="按供应商去重后的余额" />
+        <Kpi label="估算费用" value={formatUsd(summary?.estimated_cost_usd)} hint="按当前计价规则折算" highlight />
+        <Kpi label="总请求数" value={formatNumber(summary?.request_count)} hint="统计周期内调用" />
+        <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="供应商账户去重" />
+        <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
       </div>
+
+      <PerformanceStrip summary={summary} models={models} />
 
       <div className="llm-source-grid">
         {sourceGroups.map((group) => (
@@ -106,14 +124,191 @@ export function LlmUsageView({ theme = 'dark' }) {
         {sources.length === 0 && <div className="empty-panel">暂无LLM来源数据，请先在Settings配置并手动刷新。</div>}
       </div>
 
-      <div className="llm-chart-stack">
-        <AreaChart title="消耗分布" total={formatUsd(summary?.estimated_cost_usd)} series={series?.model_series || []} metric="estimated_cost_usd" formatter={formatUsd} theme={theme} />
-        <AreaChart title="请求趋势" series={series?.series || []} metric="request_count" formatter={formatNumber} compact theme={theme} />
+      <UsageDistribution
+        mode={costChartMode}
+        onModeChange={setCostChartMode}
+        total={formatUsd(summary?.estimated_cost_usd)}
+        series={series?.model_series || []}
+        range={range}
+        granularity={granularity}
+        theme={theme}
+      />
+
+      <div className="llm-insight-grid">
+        <ActivityHeatmap series={series?.series || []} />
+        <RankPanel title="Key调用排行" items={sourceRankItems(series?.series || [])} metricLabel="请求" />
       </div>
+
+      <ModelAnalysisPanel
+        view={modelView}
+        onViewChange={setModelView}
+        models={models}
+        series={series?.model_series || []}
+        range={range}
+        granularity={granularity}
+        theme={theme}
+      />
 
       <ModelTable models={models} />
     </section>
   )
+}
+
+function PerformanceStrip({ summary, models }) {
+  const health = summary?.snapshot_count ? '在线' : '等待数据'
+  const top = models.slice(0, 3)
+  return (
+    <section className="llm-health-strip">
+      <strong>性能健康</strong>
+      <span>状态 <b>{health}</b></span>
+      <span>成功率 <b>{formatPercentFromHundred(summary?.success_rate)}</b></span>
+      <span>平均RPM <b>{formatDecimal(summary?.avg_rpm)}</b></span>
+      <span>总Token <b>{formatCompact(summary?.token_count)}</b></span>
+      <span>平均延迟 <b>{formatLatency(summary?.avg_latency_seconds)}</b></span>
+      {top.map((item) => (
+        <span className="model-pill" key={item.model}>{item.model} <b>{formatNumber(item.request_count)}次</b></span>
+      ))}
+    </section>
+  )
+}
+
+function UsageDistribution({ mode, onModeChange, total, series, range, granularity, theme }) {
+  const buckets = useMemo(() => chartBuckets(range, granularity), [range, granularity])
+  const chartSeries = useMemo(() => timeBucketSeries(series, 'estimated_cost_usd', buckets, 6), [series, buckets])
+  return (
+    <ChartPanel
+      title="消耗分布"
+      accent="green"
+      total={total}
+      actions={(
+        <div className="segmented compact-segmented">
+          <button className={mode === 'bar' ? 'active' : ''} onClick={() => onModeChange('bar')}>柱状图</button>
+          <button className={mode === 'area' ? 'active' : ''} onClick={() => onModeChange('area')}>面积图</button>
+        </div>
+      )}
+    >
+      <EChart option={timeSeriesOption({ title: '消耗分布', series: chartSeries, buckets, metric: 'value', formatter: formatUsd, theme, mode })} className="llm-wide-chart" />
+    </ChartPanel>
+  )
+}
+
+function ActivityHeatmap({ series }) {
+  const days = useMemo(() => activityDays(series), [series])
+  const scrollRef = useRef(null)
+  const max = Math.max(...days.map((day) => day.value), 0)
+  const weekCount = Math.ceil(days.length / 7)
+
+  useEffect(() => {
+    const node = scrollRef.current
+    if (!node) return
+    node.scrollTo({ left: activityTodayScrollLeft(days), behavior: 'auto' })
+  }, [days])
+
+  return (
+    <section className="llm-panel activity-panel">
+      <PanelHeader title="月度活动" accent="blue" total={`活跃${days.filter((day) => day.value > 0).length}天`} />
+      <div className="activity-scroll" ref={scrollRef} aria-label="月度活动，横向滚动">
+        <div className="activity-canvas" style={{ '--activity-weeks': weekCount }}>
+          <div className="activity-grid" aria-label="月度活动">
+            {days.map((day, index) => (
+              <span
+                key={day.key}
+                className={`activity-cell level-${activityLevel(day.value, max)} row-${index % 7} ${day.isToday ? 'today' : ''}`}
+                data-tooltip={`${day.key}：${formatNumber(day.value)}次请求，Token：${formatCompact(day.tokens)}`}
+                title={`${day.key}：${formatNumber(day.value)}次请求，Token：${formatCompact(day.tokens)}`}
+              />
+            ))}
+          </div>
+          <div className="activity-months">
+            {activityMonthLabels(days).map((label) => <span key={label.key} style={{ gridColumn: label.column }}>{label.text}</span>)}
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ModelAnalysisPanel({ view, onViewChange, models, series, range, granularity, theme }) {
+  const total = models.reduce((sum, item) => sum + (item.request_count || 0), 0)
+  const buckets = useMemo(() => chartBuckets(range, granularity), [range, granularity])
+  const trendSeries = useMemo(() => timeBucketSeries(series, 'request_count', buckets, 6), [series, buckets])
+  return (
+    <ChartPanel
+      title="模型调用分析"
+      accent="pink"
+      total={`总计：${formatNumber(total)}`}
+      actions={(
+        <div className="segmented compact-segmented">
+          <button className={view === 'trend' ? 'active' : ''} onClick={() => onViewChange('trend')}>调用趋势</button>
+          <button className={view === 'pie' ? 'active' : ''} onClick={() => onViewChange('pie')}>调用次数分布</button>
+          <button className={view === 'rank' ? 'active' : ''} onClick={() => onViewChange('rank')}>调用次数排行</button>
+        </div>
+      )}
+    >
+      {view === 'trend' && <EChart option={timeSeriesOption({ title: '调用趋势', series: trendSeries, buckets, metric: 'value', formatter: formatNumber, theme, mode: 'area' })} className="llm-wide-chart" />}
+      {view === 'pie' && <EChart option={pieOption(models, theme)} className="llm-wide-chart" />}
+      {view === 'rank' && <EChart option={rankOption(models, theme)} className="llm-wide-chart" />}
+    </ChartPanel>
+  )
+}
+
+function RankPanel({ title, items, metricLabel }) {
+  const max = Math.max(...items.map((item) => item.value), 0)
+  return (
+    <section className="llm-panel rank-panel">
+      <PanelHeader title={title} accent="green" total={`Top ${Math.min(items.length, 5)}`} />
+      <div className="rank-list">
+        {items.slice(0, 5).map((item, index) => (
+          <div className="rank-row" key={item.name}>
+            <span className="rank-name">{item.name}</span>
+            <div className="rank-track"><span style={{ width: `${max ? Math.max(4, (item.value / max) * 100) : 0}%`, background: modelColors[index % modelColors.length] }} /></div>
+            <strong>{formatNumber(item.value)}</strong>
+            <small>{metricLabel}</small>
+          </div>
+        ))}
+        {items.length === 0 && <div className="empty-panel inline-empty">暂无排行数据</div>}
+      </div>
+    </section>
+  )
+}
+
+function ChartPanel({ title, accent, total, actions, children }) {
+  return (
+    <section className="llm-panel chart-shell">
+      <PanelHeader title={title} accent={accent} total={total} actions={actions} />
+      {children}
+    </section>
+  )
+}
+
+function PanelHeader({ title, accent = 'green', total, actions }) {
+  return (
+    <header className="llm-panel-header">
+      <div>
+        <span className={`panel-icon ${accent}`} />
+        <strong>{title}</strong>
+        {total && <small>{total}</small>}
+      </div>
+      {actions}
+    </header>
+  )
+}
+
+function EChart({ option, className }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!ref.current) return
+    const chart = echarts.init(ref.current)
+    chart.setOption(option, true)
+    const resize = () => chart.resize()
+    window.addEventListener('resize', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      chart.dispose()
+    }
+  }, [option])
+
+  return <div ref={ref} className={`chart ${className}`} />
 }
 
 function ProviderCard({ group, activeSource, expanded, onToggle, onSelectKey }) {
@@ -175,7 +370,7 @@ function Kpi({ label, value, hint, highlight = false }) {
   return (
     <article className={`llm-kpi ${highlight ? 'highlight' : ''}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong title={String(value)}>{value}</strong>
       <small>{hint}</small>
     </article>
   )
@@ -184,7 +379,7 @@ function Kpi({ label, value, hint, highlight = false }) {
 function ModelTable({ models }) {
   return (
     <div className="llm-table-card">
-      <div className="table-title">模型费用分析</div>
+      <div className="table-title">模型费用明细</div>
       <table>
         <thead>
           <tr>
@@ -212,108 +407,387 @@ function ModelTable({ models }) {
   )
 }
 
-function AreaChart({ title, total, series, metric, formatter, compact = false, theme = 'dark' }) {
-  const ref = useRef(null)
-  const option = useMemo(() => {
-    const palette = theme === 'light'
-      ? {
-          title: '#0f2233',
-          legend: '#536a7f',
-          axis: '#5d7286',
-          axisLine: 'rgba(15, 34, 51, 0.14)',
-          splitLine: 'rgba(15, 34, 51, 0.08)',
-          tooltipBg: 'rgba(248, 252, 255, 0.96)',
-          tooltipBorder: 'rgba(0, 166, 126, 0.24)',
-          tooltipText: '#0f2233',
-          areaEnd: 'rgba(248,252,255,0)',
-        }
-      : {
-          title: '#e8fbff',
-          legend: '#9aa7b8',
-          axis: '#94a3b8',
-          axisLine: 'rgba(148, 163, 184, 0.22)',
-          splitLine: 'rgba(148, 163, 184, 0.12)',
-          tooltipBg: 'rgba(7, 12, 24, 0.94)',
-          tooltipBorder: 'rgba(139, 220, 255, 0.18)',
-          tooltipText: '#effcff',
-          areaEnd: 'rgba(0,0,0,0)',
-        }
-    const chartSeries = (series || []).map((item, index) => {
-      const color = modelColors[index % modelColors.length]
-      return {
-        name: item.display_name || item.model || item.source_id,
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        symbolSize: 6,
-        lineStyle: { width: compact ? 2 : 3, color },
-        areaStyle: {
-          opacity: compact ? 0.12 : 0.18,
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color },
-            { offset: 1, color: palette.areaEnd },
+function timeSeriesOption({ title, series, buckets, metric, formatter, theme, mode }) {
+  const palette = chartPalette(theme)
+  const labels = buckets.map((bucket) => bucket.label)
+  const chartSeries = (series || []).map((item, index) => {
+    const color = modelColors[index % modelColors.length]
+    return {
+      name: item.display_name || item.model || item.source_id,
+      type: mode === 'bar' ? 'bar' : 'line',
+      stack: mode === 'bar' ? 'total' : undefined,
+      smooth: mode !== 'bar',
+      showSymbol: false,
+      barMaxWidth: 34,
+      lineStyle: { width: 3, color },
+      itemStyle: { color },
+      areaStyle: mode === 'area'
+        ? {
+            opacity: 0.14,
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color },
+              { offset: 1, color: palette.areaEnd },
+            ]),
+          }
+        : undefined,
+      emphasis: { focus: 'series' },
+      data: labels.map((_, pointIndex) => item.points?.[pointIndex]?.[metric] || 0),
+    }
+  })
+  return {
+    backgroundColor: 'transparent',
+    color: modelColors,
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      backgroundColor: palette.tooltipBg,
+      borderColor: palette.tooltipBorder,
+      textStyle: { color: palette.tooltipText },
+      valueFormatter: (value) => formatter(value),
+    },
+    legend: {
+      bottom: 22,
+      left: 'center',
+      icon: 'rect',
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { color: palette.legend, fontSize: 12 },
+    },
+    grid: { left: 56, right: 28, top: 32, bottom: 70 },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      boundaryGap: mode === 'bar',
+      axisLine: { lineStyle: { color: palette.axisLine } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: palette.axis,
+        interval: axisLabelInterval(labels.length),
+      },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: palette.axis },
+      splitLine: { lineStyle: { color: palette.splitLine } },
+    },
+    series: chartSeries,
+    aria: { enabled: true },
+  }
+}
+
+function pieOption(models, theme) {
+  const palette = chartPalette(theme)
+  return {
+    color: modelColors,
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: palette.tooltipBg,
+      borderColor: palette.tooltipBorder,
+      textStyle: { color: palette.tooltipText },
+      valueFormatter: (value) => formatNumber(value),
+    },
+    legend: {
+      left: 28,
+      top: 'middle',
+      orient: 'vertical',
+      textStyle: { color: palette.legend, fontSize: 12 },
+    },
+    series: [
+      {
+        name: '调用次数分布',
+        type: 'pie',
+        radius: ['42%', '64%'],
+        center: ['58%', '52%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 8, borderColor: palette.pieBorder, borderWidth: 3 },
+        label: { color: palette.title, formatter: '{b}' },
+        data: models.map((item) => ({ name: item.model, value: item.request_count || 0 })),
+      },
+    ],
+  }
+}
+
+function rankOption(models, theme) {
+  const palette = chartPalette(theme)
+  const rows = [...models].sort((a, b) => (b.request_count || 0) - (a.request_count || 0)).slice(0, 8).reverse()
+  return {
+    color: modelColors,
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: palette.tooltipBg,
+      borderColor: palette.tooltipBorder,
+      textStyle: { color: palette.tooltipText },
+      valueFormatter: (value) => formatNumber(value),
+    },
+    grid: { left: 120, right: 38, top: 26, bottom: 36 },
+    xAxis: {
+      type: 'value',
+      axisLine: { lineStyle: { color: palette.axisLine } },
+      axisLabel: { color: palette.axis },
+      splitLine: { lineStyle: { color: palette.splitLine } },
+    },
+    yAxis: {
+      type: 'category',
+      data: rows.map((item) => item.model),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: palette.axis },
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 28,
+        label: { show: true, position: 'right', color: palette.title, formatter: ({ value }) => formatNumber(value) },
+        itemStyle: {
+          borderRadius: [0, 8, 8, 0],
+          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+            { offset: 0, color: '#f97316' },
+            { offset: 1, color: '#39ff9d' },
           ]),
         },
-        emphasis: { focus: 'series' },
-        data: (item.points || []).map((point) => [point.timestamp, point[metric] || 0]),
-      }
-    })
+        data: rows.map((item) => item.request_count || 0),
+      },
+    ],
+  }
+}
+
+function chartPalette(theme) {
+  if (theme === 'light') {
     return {
-      backgroundColor: 'transparent',
-      color: modelColors,
-      title: {
-        text: total ? `${title}  总计：${total}` : title,
-        left: 24,
-        top: 18,
-        textStyle: { color: palette.title, fontSize: 16, fontWeight: 800 },
-      },
-      tooltip: {
-        trigger: 'axis',
-        confine: true,
-        backgroundColor: palette.tooltipBg,
-        borderColor: palette.tooltipBorder,
-        textStyle: { color: palette.tooltipText },
-        valueFormatter: (value) => formatter(value),
-      },
-      legend: {
-        bottom: 14,
-        left: 'center',
-        icon: 'rect',
-        itemWidth: 10,
-        itemHeight: 10,
-        textStyle: { color: palette.legend, fontSize: 12 },
-      },
-      grid: { left: 64, right: 30, bottom: compact ? 64 : 72, top: 70 },
-      xAxis: {
-        type: 'time',
-        boundaryGap: false,
-        axisLine: { lineStyle: { color: palette.axisLine } },
-        axisTick: { show: false },
-        axisLabel: { color: palette.axis },
-        splitLine: { show: false },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: { color: palette.axis },
-        splitLine: { lineStyle: { color: palette.splitLine } },
-      },
-      series: chartSeries,
+      title: '#0f2233',
+      legend: '#536a7f',
+      axis: '#5d7286',
+      axisLine: 'rgba(15, 34, 51, 0.14)',
+      splitLine: 'rgba(15, 34, 51, 0.08)',
+      tooltipBg: 'rgba(248, 252, 255, 0.96)',
+      tooltipBorder: 'rgba(0, 166, 126, 0.24)',
+      tooltipText: '#0f2233',
+      areaEnd: 'rgba(248,252,255,0)',
+      pieBorder: '#f8fcff',
     }
-  }, [title, total, series, metric, formatter, compact, theme])
+  }
+  return {
+    title: '#e8fbff',
+    legend: '#9aa7b8',
+    axis: '#94a3b8',
+    axisLine: 'rgba(148, 163, 184, 0.22)',
+    splitLine: 'rgba(148, 163, 184, 0.12)',
+    tooltipBg: 'rgba(7, 12, 24, 0.94)',
+    tooltipBorder: 'rgba(139, 220, 255, 0.18)',
+    tooltipText: '#effcff',
+    areaEnd: 'rgba(0,0,0,0)',
+    pieBorder: '#07111c',
+  }
+}
 
-  useEffect(() => {
-    if (!ref.current) return
-    const chart = echarts.init(ref.current)
-    chart.setOption(option, true)
-    const resize = () => chart.resize()
-    window.addEventListener('resize', resize)
-    return () => {
-      window.removeEventListener('resize', resize)
-      chart.dispose()
+function timeBucketSeries(series, metric, buckets, limit = 8) {
+  const bucketIndex = new Map(buckets.map((bucket, index) => [bucket.key, index]))
+  return (series || []).slice(0, limit).map((item) => {
+    const latestByBucketMember = new Map()
+    for (const point of item.points || []) {
+      const key = bucketKey(point.timestamp, buckets[0]?.granularity)
+      if (!bucketIndex.has(key)) continue
+      const value = Number(point[metric]) || 0
+      const member = point.source_id || item.source_id || item.model || item.display_name || 'default'
+      const memberKey = `${key}:${member}`
+      const current = latestByBucketMember.get(memberKey)
+      if (!current || new Date(point.timestamp) >= new Date(current.timestamp)) {
+        latestByBucketMember.set(memberKey, { key, timestamp: point.timestamp, value })
+      }
     }
-  }, [option])
+    const values = Array.from({ length: buckets.length }, () => 0)
+    for (const point of latestByBucketMember.values()) {
+      values[bucketIndex.get(point.key)] += point.value
+    }
+    return {
+      ...item,
+      points: buckets.map((bucket, index) => ({ timestamp: bucket.timestamp, value: values[index] })),
+    }
+  })
+}
 
-  return <div className={`chart-card area-chart-card ${compact ? 'compact' : ''}`}><div ref={ref} className="chart area-chart" /></div>
+function chartBuckets(range, granularity) {
+  const actualGranularity = effectiveGranularity(range, granularity)
+  if (actualGranularity === 'hour') return hourlyBuckets(range)
+  return dailyBuckets(range)
+}
+
+function dailyBuckets(range) {
+  const count = rangeDayCount(range)
+  const today = startOfLocalDay(new Date())
+  const start = new Date(today)
+  start.setDate(start.getDate() - count + 1)
+  const buckets = []
+  for (let index = 0; index < count; index += 1) {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    buckets.push({
+      key: localDateKey(date),
+      label: localShortDate(date),
+      timestamp: date.toISOString(),
+      granularity: 'day',
+    })
+  }
+  return buckets
+}
+
+function hourlyBuckets(range) {
+  const now = new Date()
+  const start = range === '24h' ? startOfLocalHour(now) : startOfLocalDay(now)
+  if (range === '24h') start.setHours(start.getHours() - 23)
+  const count = range === '24h' ? 24 : 24
+  const buckets = []
+  for (let index = 0; index < count; index += 1) {
+    const date = new Date(start)
+    date.setHours(start.getHours() + index)
+    buckets.push({
+      key: localHourKey(date),
+      label: localHourLabel(date),
+      timestamp: date.toISOString(),
+      granularity: 'hour',
+    })
+  }
+  return buckets
+}
+
+function bucketKey(timestamp, granularity) {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return String(timestamp)
+  if (granularity === 'hour') return localHourKey(date)
+  return localDateKey(date)
+}
+
+function effectiveGranularity(range, granularity) {
+  if (granularity === 'hour' && (range === 'today' || range === '24h')) return 'hour'
+  return 'day'
+}
+
+function rangeDayCount(range) {
+  return { today: 1, '24h': 1, '7d': 7, '14d': 14, '29d': 29 }[range] || 1
+}
+
+function axisLabelInterval(length) {
+  if (length <= 14) return 0
+  if (length <= 24) return 2
+  return 4
+}
+
+function startOfLocalHour(date) {
+  const result = new Date(date)
+  result.setMinutes(0, 0, 0)
+  return result
+}
+
+function localHourKey(date) {
+  return `${localDateKey(date)}T${String(date.getHours()).padStart(2, '0')}`
+}
+
+function localShortDate(date) {
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function localHourLabel(date) {
+  return `${String(date.getHours()).padStart(2, '0')}:00`
+}
+
+function activityDays(series) {
+  const today = startOfLocalDay(new Date())
+  const todayKey = localDateKey(today)
+  const start = new Date(today.getFullYear(), 0, 1)
+  const end = new Date(today.getFullYear(), 11, 31)
+  const values = dailySourceTotals(series)
+  const days = []
+  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const key = localDateKey(cursor)
+    const value = values.get(key) || { requests: 0, tokens: 0 }
+    days.push({ key, value: value.requests, tokens: value.tokens, isToday: key === todayKey })
+  }
+  return days
+}
+
+function activityTodayScrollLeft(days) {
+  const todayIndex = days.findIndex((day) => day.isToday)
+  if (todayIndex < 0) return 0
+  const weekIndex = Math.floor(todayIndex / 7)
+  return Math.max(0, weekIndex * 32 - 180)
+}
+
+function dailySourceTotals(series) {
+  const totals = new Map()
+  for (const item of series || []) {
+    const latestByDay = new Map()
+    for (const point of item.points || []) {
+      const date = new Date(point.timestamp)
+      if (Number.isNaN(date.getTime())) continue
+      const key = localDateKey(date)
+      const value = {
+        requests: Number(point.request_count) || 0,
+        tokens: Number(point.token_count) || 0,
+      }
+      const current = latestByDay.get(key)
+      if (!current || date > current.date) latestByDay.set(key, { date, value })
+    }
+    for (const [key, itemValue] of latestByDay.entries()) {
+      const current = totals.get(key) || { requests: 0, tokens: 0 }
+      totals.set(key, {
+        requests: current.requests + itemValue.value.requests,
+        tokens: current.tokens + itemValue.value.tokens,
+      })
+    }
+  }
+  return totals
+}
+
+function activityMonthLabels(days) {
+  const labels = []
+  let lastMonth = ''
+  days.forEach((day, index) => {
+    const month = day.key.slice(5, 7)
+    if (month !== lastMonth) {
+      labels.push({ key: day.key, text: `${Number(month)}月`, column: Math.floor(index / 7) + 1 })
+      lastMonth = month
+    }
+  })
+  return labels
+}
+
+function activityLevel(value, max) {
+  if (!value || !max) return 0
+  const ratio = value / max
+  if (ratio > 0.75) return 4
+  if (ratio > 0.45) return 3
+  if (ratio > 0.18) return 2
+  return 1
+}
+
+function sourceRankItems(series) {
+  return (series || [])
+    .map((item) => ({
+      name: item.display_name || item.source_id,
+      value: latestPointValue(item.points, 'request_count'),
+    }))
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value)
+}
+
+function latestPointValue(points, key) {
+  const latest = [...(points || [])].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
+  return Number(latest?.[key]) || 0
+}
+
+function startOfLocalDay(date) {
+  const result = new Date(date)
+  result.setHours(0, 0, 0, 0)
+  return result
+}
+
+function localDateKey(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function groupLlmItems(items = []) {
@@ -416,7 +890,12 @@ function statusText(status) {
 }
 
 function basisText(value) {
-  return { openai_tokens: 'OpenAI 单价', newapi_quota: 'New API 折算', unknown: '未知' }[value] || value || '--'
+  return { openai_tokens: 'OpenAI单价', newapi_quota: 'New API折算', unknown: '未知' }[value] || value || '--'
+}
+
+function formatPercentFromHundred(value) {
+  if (value == null) return '--'
+  return `${Number(value).toFixed(2)}%`
 }
 
 function formatNumber(value) {
@@ -427,6 +906,11 @@ function formatNumber(value) {
 function formatDecimal(value) {
   if (value == null) return '--'
   return Number(value).toFixed(2)
+}
+
+function formatLatency(value) {
+  if (value == null) return '--'
+  return `${Number(value).toFixed(2)}s`
 }
 
 function formatUsd(value) {
