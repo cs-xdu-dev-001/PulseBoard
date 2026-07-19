@@ -17,7 +17,7 @@ from app.llm_usage import (
     save_llm_usage_config,
     update_llm_provider_config,
 )
-from app.llm_usage_collector import check_model_connection, collect_deepseek_platform, collect_newapi
+from app.llm_usage_collector import check_model_connection, collect_deepseek_platform, collect_newapi, collect_source
 from app.llm_pricing import estimate_model_cost_usd
 
 
@@ -232,6 +232,28 @@ def test_collect_deepseek_platform_calls_official_usage_endpoints(monkeypatch):
     assert requested[0][1]["x-client-platform"] == "web"
     assert result.status == "online"
     assert result.balance_total == 12.8
+
+
+def test_collect_source_reports_openai_gateway_config_health():
+    result = collect_source(
+        LlmUsageConfig(
+            "deepseek-main",
+            "codex",
+            "openai_gateway",
+            base_url="https://api.deepseek.com",
+            api_key="upstream-key",
+            access_token="gateway-token",
+        )
+    )
+
+    assert result.status == "online"
+    assert result.error is None
+    assert result.raw_summary == {
+        "gateway": {
+            "usage_mode": "proxy_only",
+            "message": "网关用量由真实模型请求写入，不执行定时拉取",
+        }
+    }
 
 
 def test_normalize_newapi_tolerates_partial_payloads():

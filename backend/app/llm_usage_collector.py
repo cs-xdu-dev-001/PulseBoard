@@ -56,6 +56,8 @@ def collect_source(config: LlmUsageConfig) -> LlmUsageResult:
             return collect_deepseek_platform(config)
         if config.source_type == "newapi_admin":
             return collect_newapi(config)
+        if config.source_type == "openai_gateway":
+            return collect_openai_gateway_config(config)
         return error_result(config, f"Unsupported LLM usage source type: {config.source_type}")
     except Exception as exc:
         return error_result(config, str(exc))
@@ -93,6 +95,30 @@ def collect_deepseek_platform(config: LlmUsageConfig) -> LlmUsageResult:
                 {"Authorization": f"Bearer {config.api_key}"},
             )
     return normalize_deepseek_platform(config, payloads)
+
+
+def collect_openai_gateway_config(config: LlmUsageConfig) -> LlmUsageResult:
+    missing = []
+    if not config.base_url:
+        missing.append("上游Base URL")
+    if not config.api_key:
+        missing.append("上游模型API Key")
+    if not config.access_token:
+        missing.append("网关访问令牌")
+    if missing:
+        return error_result(config, f"监控网关缺少配置：{'、'.join(missing)}")
+    return LlmUsageResult(
+        source_id=config.source_id,
+        display_name=config.display_name,
+        source_type=config.source_type,
+        status="online",
+        raw_summary={
+            "gateway": {
+                "usage_mode": "proxy_only",
+                "message": "网关用量由真实模型请求写入，不执行定时拉取",
+            }
+        },
+    )
 
 
 def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
