@@ -349,6 +349,127 @@ def test_llm_usage_summary_prefers_newapi_official_quota_amount():
     assert series["series"][0]["points"][0]["estimated_cost_usd"] == 11.08799
 
 
+def test_llm_usage_summary_marks_deepseek_balance_as_usage_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "deepseek-main",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "display_name": "DeepSeek主Key",
+                "source_type": "deepseek_balance",
+            }
+        ],
+    )
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="deepseek-main",
+            display_name="DeepSeek主Key",
+            source_type="deepseek_balance",
+            status="online",
+            last_checked_at=now,
+            balance_currency="CNY",
+            balance_total=12.8,
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                raw_summary={"is_available": True, "balance_infos": [{"currency": "CNY", "total_balance": "12.8"}]},
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=24h&source=provider:deepseek").json()
+    series = client.get("/api/llm/usage/series?range=24h&source=provider:deepseek").json()
+    models = client.get("/api/llm/usage/models?range=24h&source=provider:deepseek").json()
+
+    assert summary["usage_supported"] is False
+    assert summary["usage_scope"] == "balance_only"
+    assert summary["usage_message"] == "DeepSeek官方只提供余额，未提供请求、token、模型用量统计"
+    assert series["usage_supported"] is False
+    assert models["usage_supported"] is False
+
+
+def test_llm_usage_summary_marks_mixed_sources_as_partial_usage(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "academic-main",
+                "provider_id": "academic",
+                "provider_name": "EduModel",
+                "display_name": "中转Key",
+                "source_type": "newapi_admin",
+            },
+            {
+                "source_id": "deepseek-main",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "display_name": "DeepSeek主Key",
+                "source_type": "deepseek_balance",
+            },
+        ],
+    )
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        newapi = LlmUsageSource(
+            source_id="academic-main",
+            display_name="中转Key",
+            source_type="newapi_admin",
+            status="online",
+            last_checked_at=now,
+        )
+        deepseek = LlmUsageSource(
+            source_id="deepseek-main",
+            display_name="DeepSeek主Key",
+            source_type="deepseek_balance",
+            status="online",
+            last_checked_at=now,
+            balance_currency="CNY",
+            balance_total=12.8,
+        )
+        db.add_all([newapi, deepseek])
+        db.flush()
+        db.add_all(
+            [
+                LlmUsageSnapshot(
+                    source_id=newapi.id,
+                    collected_at=now,
+                    range_key="latest",
+                    request_count=20,
+                    token_count=3000,
+                    quota_used=100,
+                    estimated_amount=100,
+                    raw_summary={"token_usage": {"total_used": 100}},
+                ),
+                LlmUsageSnapshot(
+                    source_id=deepseek.id,
+                    collected_at=now,
+                    range_key="latest",
+                    raw_summary={"is_available": True},
+                ),
+            ]
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=24h").json()
+
+    assert summary["usage_supported"] is True
+    assert summary["usage_scope"] == "partial"
+    assert summary["request_count"] == 20
+    assert summary["usage_message"] == "部分来源仅提供余额，未计入请求、token、模型用量统计"
+
+
 def test_llm_usage_series_includes_model_area_series():
     client, session_factory = make_client()
     seed_llm(session_factory)

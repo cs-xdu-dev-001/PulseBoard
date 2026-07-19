@@ -1218,6 +1218,42 @@ footer {
   justify-content: flex-end;
 }
 
+.llm-usage-notice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 1px solid rgba(249, 115, 22, 0.28);
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.08);
+  color: #ffd8a8;
+  box-shadow: 0 0 24px rgba(249, 115, 22, 0.1);
+}
+
+.llm-usage-notice.partial {
+  border-color: rgba(139, 220, 255, 0.22);
+  background: rgba(139, 220, 255, 0.07);
+  color: #c9ecff;
+  box-shadow: 0 0 24px rgba(139, 220, 255, 0.1);
+}
+
+.llm-usage-notice strong {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff2d9;
+  font-size: 13px;
+}
+
+.llm-usage-notice span {
+  min-width: 0;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .llm-filter-control {
   display: inline-flex;
   align-items: center;

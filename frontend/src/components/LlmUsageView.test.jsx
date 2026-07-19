@@ -147,6 +147,54 @@ it('New API供应商展开后显示每个Key自己的可用额度', async () => 
   expect(within(backupRow).getByText('$1.9000')).toBeVisible()
 })
 
+it('DeepSeek官方余额来源不把缺失的用量统计显示成正常0', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'deepseek-main',
+        provider_id: 'deepseek',
+        provider_name: 'DeepSeek',
+        display_name: '主Key',
+        source_type: 'deepseek_balance',
+        status: 'online',
+        balance_currency: 'CNY',
+        balance_total: 12.8,
+      },
+    ],
+  })
+  fetchLlmSummary.mockResolvedValue({
+    usage_supported: false,
+    usage_scope: 'balance_only',
+    usage_message: 'DeepSeek官方只提供余额，未提供请求、token、模型用量统计',
+    request_count: 0,
+    token_count: 0,
+    estimated_cost_usd: 0,
+    snapshot_count: 1,
+  })
+  fetchLlmSeries.mockResolvedValue({
+    usage_supported: false,
+    usage_scope: 'balance_only',
+    usage_message: 'DeepSeek官方只提供余额，未提供请求、token、模型用量统计',
+    series: [{ source_id: 'deepseek-main', display_name: '主Key', points: [] }],
+    model_series: [],
+  })
+  fetchLlmModels.mockResolvedValue({
+    usage_supported: false,
+    usage_scope: 'balance_only',
+    usage_message: 'DeepSeek官方只提供余额，未提供请求、token、模型用量统计',
+    models: [],
+  })
+
+  render(<LlmUsageView />)
+
+  expect(await screen.findByText('官方仅余额')).toBeVisible()
+  expect(screen.getByText('DeepSeek官方只提供余额，未提供请求、token、模型用量统计')).toBeVisible()
+  expect(screen.getAllByText('官方未提供用量统计').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('用量不可用').length).toBeGreaterThan(0)
+  expect(screen.getByText('模型用量不可用')).toBeVisible()
+  expect(screen.queryByText('总计：0')).not.toBeInTheDocument()
+})
+
 it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
   fetchLlmSources.mockResolvedValue({
     sources: [

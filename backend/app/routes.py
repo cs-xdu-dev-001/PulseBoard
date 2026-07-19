@@ -337,6 +337,7 @@ def llm_usage_summary(
     db: Session = Depends(get_db),
 ) -> dict:
     source_id, configured_source_ids = _llm_source_selection(source)
+    source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     snapshots = _latest_llm_snapshots(db, range, source_id, configured_source_ids)
     request_count = sum(point.request_count or 0 for point in snapshots)
     token_count = sum(point.token_count or 0 for point in snapshots)
@@ -357,6 +358,7 @@ def llm_usage_summary(
         "avg_latency_seconds": round(sum(latency_values) / len(latency_values), 4) if latency_values else None,
         "success_rate": round(sum(success_values) / len(success_values), 4) if success_values else None,
         "snapshot_count": len(snapshots),
+        **_llm_usage_capability(source_rows),
     }
 
 
@@ -367,6 +369,7 @@ def llm_usage_series(
     db: Session = Depends(get_db),
 ) -> dict:
     source_id, configured_source_ids = _llm_source_selection(source)
+    source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     rows = _llm_snapshot_rows(
         db,
         range,
@@ -425,6 +428,7 @@ def llm_usage_series(
             key=lambda item: sum(point.get("estimated_cost_usd") or 0 for point in item["points"]),
             reverse=True,
         ),
+        **_llm_usage_capability(source_rows),
     }
 
 
@@ -436,6 +440,7 @@ def llm_usage_models(
 ) -> dict:
     totals: dict[str, dict] = {}
     source_id, configured_source_ids = _llm_source_selection(source)
+    source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     for snapshot in _latest_llm_snapshots(db, range, source_id, configured_source_ids):
         for item in snapshot.model_stats or []:
             model = item.get("model") or "unknown"
@@ -469,6 +474,7 @@ def llm_usage_models(
     return {
         "range": range,
         "models": sorted(totals.values(), key=lambda item: item.get("estimated_cost_usd") or item["amount"], reverse=True),
+        **_llm_usage_capability(source_rows),
     }
 
 
@@ -722,6 +728,24 @@ def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
     if snapshot.estimated_amount is not None and (snapshot.raw_summary or {}).get("token_usage"):
         return snapshot.estimated_amount
     return model_cost
+
+
+def _llm_usage_capability(source_rows: list[LlmUsageSource]) -> dict:
+    deepseek_count = sum(1 for source in source_rows if source.source_type == "deepseek_balance")
+    usage_source_count = len(source_rows) - deepseek_count
+    if deepseek_count and not usage_source_count:
+        return {
+            "usage_supported": False,
+            "usage_scope": "balance_only",
+            "usage_message": "DeepSeek官方只提供余额，未提供请求、token、模型用量统计",
+        }
+    if deepseek_count and usage_source_count:
+        return {
+            "usage_supported": True,
+            "usage_scope": "partial",
+            "usage_message": "部分来源仅提供余额，未计入请求、token、模型用量统计",
+        }
+    return {"usage_supported": True, "usage_scope": "full", "usage_message": None}
 
 
 def _iso(value: datetime | None) -> str | None:

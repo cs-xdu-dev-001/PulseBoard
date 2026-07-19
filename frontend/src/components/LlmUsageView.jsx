@@ -67,7 +67,10 @@ export function LlmUsageView({ theme = 'dark' }) {
 
   const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
   const totalBalance = useMemo(() => totalProviderBalance(sourceGroups), [sourceGroups])
-  const topModel = models[0]?.model || '--'
+  const usageUnavailable = summary?.usage_supported === false
+  const usagePartial = summary?.usage_scope === 'partial'
+  const usageMessage = summary?.usage_message || series?.usage_message || ''
+  const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
 
   return (
     <section className="llm-view">
@@ -102,14 +105,21 @@ export function LlmUsageView({ theme = 'dark' }) {
         <button className="glow-button" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '刷新中' : '手动刷新'}</button>
       </div>
 
+      {(usageUnavailable || usagePartial) && (
+        <section className={`llm-usage-notice ${usageUnavailable ? 'balance-only' : 'partial'}`}>
+          <strong>{usageUnavailable ? '官方仅余额' : '部分统计'}</strong>
+          <span>{usageMessage}</span>
+        </section>
+      )}
+
       <div className="llm-kpi-grid">
-        <Kpi label="官方消耗" value={formatUsd(summary?.estimated_cost_usd)} hint="优先采用供应商统计" highlight />
-        <Kpi label="总请求数" value={formatNumber(summary?.request_count)} hint="统计周期内调用" />
+        <Kpi label="官方消耗" value={usageUnavailable ? '--' : formatUsd(summary?.estimated_cost_usd)} hint={usageUnavailable ? '官方未提供用量统计' : '优先采用供应商统计'} highlight />
+        <Kpi label="总请求数" value={usageUnavailable ? '--' : formatNumber(summary?.request_count)} hint={usageUnavailable ? '用量不可用' : '统计周期内调用'} />
         <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="供应商账户去重" />
         <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
       </div>
 
-      <PerformanceStrip summary={summary} models={models} />
+      <PerformanceStrip summary={summary} models={models} usageUnavailable={usageUnavailable} />
 
       <div className="llm-source-grid">
         {sourceGroups.map((group) => (
@@ -134,11 +144,12 @@ export function LlmUsageView({ theme = 'dark' }) {
         range={range}
         granularity={granularity}
         theme={theme}
+        usageUnavailable={usageUnavailable}
       />
 
       <div className="llm-insight-grid">
-        <ActivityHeatmap series={series?.series || []} />
-        <RankPanel title="Key调用排行" items={sourceRankItems(series?.series || [])} metricLabel="请求" />
+        <ActivityHeatmap series={series?.series || []} usageUnavailable={usageUnavailable} />
+        <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(series?.series || [])} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
       </div>
 
       <ModelAnalysisPanel
@@ -149,23 +160,24 @@ export function LlmUsageView({ theme = 'dark' }) {
         range={range}
         granularity={granularity}
         theme={theme}
+        usageUnavailable={usageUnavailable}
       />
 
-      <ModelTable models={models} />
+      <ModelTable models={models} usageUnavailable={usageUnavailable} />
     </section>
   )
 }
 
-function PerformanceStrip({ summary, models }) {
+function PerformanceStrip({ summary, models, usageUnavailable }) {
   const health = summary?.snapshot_count ? '在线' : '等待数据'
-  const top = models.slice(0, 3)
+  const top = usageUnavailable ? [] : models.slice(0, 3)
   return (
     <section className="llm-health-strip">
       <strong>性能健康</strong>
       <span>状态 <b>{health}</b></span>
       <span>成功率 <b>{formatPercentFromHundred(summary?.success_rate)}</b></span>
       <span>平均RPM <b>{formatDecimal(summary?.avg_rpm)}</b></span>
-      <span>总Token <b>{formatCompact(summary?.token_count)}</b></span>
+      <span>总Token <b>{usageUnavailable ? '--' : formatCompact(summary?.token_count)}</b></span>
       <span>平均延迟 <b>{formatLatency(summary?.avg_latency_seconds)}</b></span>
       {top.map((item) => (
         <span className="model-pill" key={item.model}>{item.model} <b>{formatNumber(item.request_count)}次</b></span>
@@ -174,7 +186,7 @@ function PerformanceStrip({ summary, models }) {
   )
 }
 
-function UsageDistribution({ mode, onModeChange, total, series, range, granularity, theme }) {
+function UsageDistribution({ mode, onModeChange, total, series, range, granularity, theme, usageUnavailable }) {
   const buckets = useMemo(() => chartBuckets(range, granularity), [range, granularity])
   const chartSeries = useMemo(() => timeBucketSeries(series, 'estimated_cost_usd', buckets, 6), [series, buckets])
   return (
@@ -189,12 +201,14 @@ function UsageDistribution({ mode, onModeChange, total, series, range, granulari
         </div>
       )}
     >
-      <EChart option={timeSeriesOption({ title: '消耗分布', series: chartSeries, buckets, metric: 'value', formatter: formatUsd, theme, mode })} className="llm-wide-chart" />
+      {usageUnavailable
+        ? <div className="empty-panel chart-empty">官方未提供用量统计</div>
+        : <EChart option={timeSeriesOption({ title: '消耗分布', series: chartSeries, buckets, metric: 'value', formatter: formatUsd, theme, mode })} className="llm-wide-chart" />}
     </ChartPanel>
   )
 }
 
-function ActivityHeatmap({ series }) {
+function ActivityHeatmap({ series, usageUnavailable }) {
   const days = useMemo(() => activityDays(series), [series])
   const scrollRef = useRef(null)
   const max = Math.max(...days.map((day) => day.value), 0)
@@ -209,6 +223,7 @@ function ActivityHeatmap({ series }) {
   return (
     <section className="llm-panel activity-panel">
       <PanelHeader title="月度活动" accent="blue" total={`活跃${days.filter((day) => day.value > 0).length}天`} />
+      {usageUnavailable && <div className="empty-panel inline-empty">官方未提供用量统计</div>}
       <div className="activity-scroll" ref={scrollRef} aria-label="月度活动，横向滚动">
         <div className="activity-canvas" style={{ '--activity-weeks': weekCount }}>
           <div className="activity-grid" aria-label="月度活动">
@@ -230,7 +245,7 @@ function ActivityHeatmap({ series }) {
   )
 }
 
-function ModelAnalysisPanel({ view, onViewChange, models, series, range, granularity, theme }) {
+function ModelAnalysisPanel({ view, onViewChange, models, series, range, granularity, theme, usageUnavailable }) {
   const total = models.reduce((sum, item) => sum + (item.request_count || 0), 0)
   const buckets = useMemo(() => chartBuckets(range, granularity), [range, granularity])
   const trendSeries = useMemo(() => timeBucketSeries(series, 'request_count', buckets, 6), [series, buckets])
@@ -238,7 +253,7 @@ function ModelAnalysisPanel({ view, onViewChange, models, series, range, granula
     <ChartPanel
       title="模型调用分析"
       accent="pink"
-      total={`总计：${formatNumber(total)}`}
+      total={usageUnavailable ? '模型用量不可用' : `总计：${formatNumber(total)}`}
       actions={(
         <div className="segmented compact-segmented">
           <button className={view === 'trend' ? 'active' : ''} onClick={() => onViewChange('trend')}>调用趋势</button>
@@ -247,14 +262,15 @@ function ModelAnalysisPanel({ view, onViewChange, models, series, range, granula
         </div>
       )}
     >
-      {view === 'trend' && <EChart option={timeSeriesOption({ title: '调用趋势', series: trendSeries, buckets, metric: 'value', formatter: formatNumber, theme, mode: 'area' })} className="llm-wide-chart" />}
-      {view === 'pie' && <EChart option={pieOption(models, theme)} className="llm-wide-chart" />}
-      {view === 'rank' && <EChart option={rankOption(models, theme)} className="llm-wide-chart" />}
+      {usageUnavailable && <div className="empty-panel chart-empty">官方未提供用量统计</div>}
+      {!usageUnavailable && view === 'trend' && <EChart option={timeSeriesOption({ title: '调用趋势', series: trendSeries, buckets, metric: 'value', formatter: formatNumber, theme, mode: 'area' })} className="llm-wide-chart" />}
+      {!usageUnavailable && view === 'pie' && <EChart option={pieOption(models, theme)} className="llm-wide-chart" />}
+      {!usageUnavailable && view === 'rank' && <EChart option={rankOption(models, theme)} className="llm-wide-chart" />}
     </ChartPanel>
   )
 }
 
-function RankPanel({ title, items, metricLabel }) {
+function RankPanel({ title, items, metricLabel, emptyLabel = '暂无排行数据' }) {
   const max = Math.max(...items.map((item) => item.value), 0)
   return (
     <section className="llm-panel rank-panel">
@@ -268,7 +284,7 @@ function RankPanel({ title, items, metricLabel }) {
             <small>{metricLabel}</small>
           </div>
         ))}
-        {items.length === 0 && <div className="empty-panel inline-empty">暂无排行数据</div>}
+        {items.length === 0 && <div className="empty-panel inline-empty">{emptyLabel}</div>}
       </div>
     </section>
   )
@@ -385,7 +401,7 @@ function Kpi({ label, value, hint, highlight = false }) {
   )
 }
 
-function ModelTable({ models }) {
+function ModelTable({ models, usageUnavailable }) {
   return (
     <div className="llm-table-card">
       <div className="table-title">模型费用明细</div>
@@ -409,7 +425,7 @@ function ModelTable({ models }) {
               <td>{basisText(item.pricing_basis)}</td>
             </tr>
           ))}
-          {models.length === 0 && <tr><td colSpan="5">暂无模型维度统计</td></tr>}
+          {models.length === 0 && <tr><td colSpan="5">{usageUnavailable ? '官方未提供模型用量统计' : '暂无模型维度统计'}</td></tr>}
         </tbody>
       </table>
     </div>
