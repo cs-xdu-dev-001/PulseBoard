@@ -298,6 +298,46 @@ it('部分统计视图中过滤仅余额来源的用量序列', async () => {
   expect(screen.queryByTitle(new RegExp(`${localDateKey(new Date())}：111次请求`))).not.toBeInTheDocument()
 })
 
+it('New API日志不完整时把Token标记为采样值', async () => {
+  const today = new Date()
+  today.setHours(10, 0, 0, 0)
+  fetchLlmSummary.mockResolvedValue({
+    usage_supported: true,
+    usage_scope: 'full',
+    token_usage_complete: false,
+    token_usage_scope: 'sampled_logs',
+    token_usage_message: 'NewAPI日志超过当前采集上限，Token为采样值，官方消耗金额仍以额度统计为准',
+    logs_truncated: true,
+    logs_total: 240000,
+    logs_collected: 20000,
+    estimated_cost_usd: 12.34,
+    request_count: 20000,
+    token_count: 2_000_000,
+    snapshot_count: 1,
+  })
+  fetchLlmSeries.mockResolvedValue({
+    token_usage_complete: false,
+    token_usage_scope: 'sampled_logs',
+    logs_truncated: true,
+    series: [
+      {
+        source_id: 'academic-main',
+        source_type: 'newapi_admin',
+        display_name: '主Key',
+        points: [{ timestamp: today.toISOString(), request_count: 20000, token_count: 2_000_000 }],
+      },
+    ],
+    model_series: [],
+  })
+
+  render(<LlmUsageView />)
+
+  expect(await screen.findByText('Token采样')).toBeVisible()
+  expect(screen.getByText('NewAPI日志超过当前采集上限，Token为采样值，官方消耗金额仍以额度统计为准')).toBeVisible()
+  expect(screen.queryByText('总Token')).not.toBeInTheDocument()
+  expect(screen.getByTitle(new RegExp(`${localDateKey(today)}：20,000次请求，采样Token：2.00M`))).toBeVisible()
+})
+
 it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
   fetchLlmSources.mockResolvedValue({
     sources: [

@@ -839,6 +839,119 @@ def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatc
     assert [point["request_count"] for point in points] == [7, 3]
 
 
+def test_llm_usage_summary_reports_newapi_truncated_logs(monkeypatch):
+    mock_academic_config(monkeypatch)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                request_count=20_000,
+                token_count=2_000_000,
+                quota_used=50_000,
+                estimated_amount=0.1,
+                model_stats=[{"model": "gpt-5.5", "request_count": 20_000, "token_count": 2_000_000, "amount": 50_000}],
+                raw_summary={
+                    "logs": {
+                        "total": 240_000,
+                        "page_size": 1000,
+                        "pages_collected": 20,
+                        "truncated": True,
+                    },
+                    "newapi": {
+                        "buckets": [
+                            {
+                                "timestamp": now.replace(minute=0, second=0, microsecond=0).isoformat(),
+                                "model": "gpt-5.5",
+                                "request_count": 20_000,
+                                "token_count": 2_000_000,
+                                "input_tokens": 1_200_000,
+                                "output_tokens": 800_000,
+                                "amount": 50_000,
+                                "estimated_cost_usd": 0.1,
+                                "pricing_basis": "newapi_quota",
+                            }
+                        ]
+                    },
+                },
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=today").json()
+    series = client.get("/api/llm/usage/series?range=today").json()
+
+    assert summary["token_usage_complete"] is False
+    assert summary["logs_truncated"] is True
+    assert summary["logs_total"] == 240_000
+    assert summary["logs_collected"] == 20_000
+    assert "采样" in summary["token_usage_message"]
+    assert series["token_usage_complete"] is False
+    assert series["logs_truncated"] is True
+
+
+def test_llm_usage_series_ignores_legacy_newapi_bucket_token_count(monkeypatch):
+    mock_academic_config(monkeypatch)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now + timedelta(minutes=5),
+                range_key="latest",
+                request_count=1,
+                token_count=294_000_000_000,
+                quota_used=100,
+                estimated_amount=0.0002,
+                model_stats=[{"model": "gpt-5.5", "request_count": 1, "token_count": 294_000_000_000, "amount": 100}],
+                raw_summary={
+                    "newapi": {
+                        "buckets": [
+                            {
+                                "timestamp": now.isoformat(),
+                                "model": "gpt-5.5",
+                                "request_count": 1,
+                                "token_count": 294_000_000_000,
+                                "amount": 100,
+                                "estimated_cost_usd": 0.0002,
+                                "pricing_basis": "newapi_quota",
+                            }
+                        ]
+                    }
+                },
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=today").json()
+    series = client.get("/api/llm/usage/series?range=today").json()
+
+    assert summary["token_count"] == 0
+    assert summary["token_usage_complete"] is False
+    assert summary["token_usage_scope"] == "untrusted_legacy_logs"
+    assert series["series"][0]["points"][0]["token_count"] is None
+
+
 def test_llm_usage_series_limits_points_per_source(monkeypatch):
     mock_academic_config(monkeypatch)
     client, session_factory = make_client()

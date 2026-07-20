@@ -345,9 +345,10 @@ def llm_usage_summary(
 ) -> dict:
     source_id, configured_source_ids = _llm_source_selection(source)
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
-    snapshots = _latest_llm_snapshots(db, range, source_id, configured_source_ids)
+    snapshot_rows = _latest_llm_snapshot_rows(db, range, source_id, configured_source_ids)
+    snapshots = [snapshot for snapshot, _source_row in snapshot_rows]
     request_count = sum(point.request_count or 0 for point in snapshots)
-    token_count = sum(point.token_count or 0 for point in snapshots)
+    token_count = sum(_snapshot_token_count(point, source_row) for point, source_row in snapshot_rows)
     amount = sum(point.estimated_amount or 0 for point in snapshots)
     estimated_cost = sum(_snapshot_cost(point) or 0 for point in snapshots)
     rpm_values = [point.rpm for point in snapshots if point.rpm is not None]
@@ -366,6 +367,7 @@ def llm_usage_summary(
         "success_rate": round(sum(success_values) / len(success_values), 4) if success_values else None,
         "snapshot_count": len(snapshots),
         **_llm_usage_capability(source_rows),
+        **_llm_token_usage_status(snapshot_rows),
     }
 
 
@@ -455,6 +457,7 @@ def llm_usage_series(
             reverse=True,
         ),
         **_llm_usage_capability(source_rows),
+        **_llm_token_usage_status(rows),
     }
 
 
@@ -761,8 +764,17 @@ def _latest_llm_snapshots(
     source_id: str | None,
     configured_source_ids: list[str] | None = None,
 ) -> list[LlmUsageSnapshot]:
-    rows = _llm_snapshot_rows(db, range_value, source_id, configured_source_ids, per_source_limit=1)
+    rows = _latest_llm_snapshot_rows(db, range_value, source_id, configured_source_ids)
     return [snapshot for snapshot, _source in rows]
+
+
+def _latest_llm_snapshot_rows(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None = None,
+) -> list[tuple[LlmUsageSnapshot, LlmUsageSource]]:
+    return _llm_snapshot_rows(db, range_value, source_id, configured_source_ids, per_source_limit=1)
 
 
 def _llm_series_point_limit(range_value: str) -> int:
@@ -839,6 +851,124 @@ def _newapi_snapshot_buckets(snapshot: LlmUsageSnapshot) -> list[dict]:
     return buckets if isinstance(buckets, list) else []
 
 
+def _snapshot_token_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource) -> float:
+    if source_row.source_type != "newapi_admin":
+        return snapshot.token_count or 0
+    buckets = _newapi_snapshot_buckets(snapshot)
+    if not buckets:
+        return snapshot.token_count or 0
+    total = 0.0
+    seen = False
+    for bucket in buckets:
+        value = _trusted_newapi_bucket_token_count(bucket)
+        if value is None:
+            continue
+        total += value
+        seen = True
+    return total if seen else 0
+
+
+def _trusted_newapi_bucket_token_count(bucket: dict) -> float | None:
+    if not isinstance(bucket, dict):
+        return None
+    if "input_tokens" not in bucket and "output_tokens" not in bucket:
+        return None
+    return (_number_from_any(bucket, ["input_tokens"]) or 0) + (_number_from_any(bucket, ["output_tokens"]) or 0)
+
+
+def _llm_token_usage_status(rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]]) -> dict:
+    has_newapi = False
+    logs_truncated = False
+    legacy_untrusted = False
+    logs_total = 0
+    logs_collected = 0
+    saw_log_meta = False
+    for snapshot, source_row in rows:
+        if source_row.source_type != "newapi_admin":
+            continue
+        has_newapi = True
+        meta = _newapi_logs_meta(snapshot)
+        if meta["total"] is not None:
+            saw_log_meta = True
+            logs_total += meta["total"]
+            logs_collected += meta["collected"]
+        logs_truncated = logs_truncated or meta["truncated"]
+        legacy_untrusted = legacy_untrusted or _newapi_has_untrusted_bucket_tokens(snapshot)
+
+    if not has_newapi:
+        return {
+            "token_usage_complete": True,
+            "token_usage_scope": "full",
+            "token_usage_message": None,
+            "logs_truncated": False,
+            "logs_total": None,
+            "logs_collected": None,
+        }
+    if logs_truncated:
+        return {
+            "token_usage_complete": False,
+            "token_usage_scope": "sampled_logs",
+            "token_usage_message": "NewAPI日志超过当前采集上限，Token为采样值，官方消耗金额仍以额度统计为准",
+            "logs_truncated": True,
+            "logs_total": logs_total if saw_log_meta else None,
+            "logs_collected": logs_collected if saw_log_meta else None,
+        }
+    if legacy_untrusted:
+        return {
+            "token_usage_complete": False,
+            "token_usage_scope": "untrusted_legacy_logs",
+            "token_usage_message": "历史NewAPI快照缺少输入/输出Token明细，已忽略不可信Token值",
+            "logs_truncated": False,
+            "logs_total": logs_total if saw_log_meta else None,
+            "logs_collected": logs_collected if saw_log_meta else None,
+        }
+    return {
+        "token_usage_complete": True,
+        "token_usage_scope": "full",
+        "token_usage_message": None,
+        "logs_truncated": False,
+        "logs_total": logs_total if saw_log_meta else None,
+        "logs_collected": logs_collected if saw_log_meta else None,
+    }
+
+
+def _newapi_has_untrusted_bucket_tokens(snapshot: LlmUsageSnapshot) -> bool:
+    for bucket in _newapi_snapshot_buckets(snapshot):
+        if _trusted_newapi_bucket_token_count(bucket) is None and _number_from_any(bucket, ["token_count"]) not in (None, 0):
+            return True
+    return False
+
+
+def _newapi_logs_meta(snapshot: LlmUsageSnapshot) -> dict[str, int | bool | None]:
+    logs = (snapshot.raw_summary or {}).get("logs")
+    if isinstance(logs, dict) and isinstance(logs.get("data"), dict):
+        logs = logs["data"]
+    if not isinstance(logs, dict):
+        return {"total": None, "collected": 0, "truncated": False}
+    total = _optional_int(_number_from_any(logs, ["total"]))
+    page_size = _optional_int(_number_from_any(logs, ["page_size"]))
+    pages_collected = _optional_int(_number_from_any(logs, ["pages_collected"]))
+    items = logs.get("items")
+    item_count = len(items) if isinstance(items, list) else None
+    if page_size is not None and pages_collected is not None:
+        collected = page_size * pages_collected
+    else:
+        collected = item_count or 0
+    if total is not None:
+        collected = min(collected, total)
+    return {
+        "total": total,
+        "collected": collected,
+        "truncated": logs.get("truncated") is True or (total is not None and collected < total),
+    }
+
+
+def _optional_int(value: float | None) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
 def _newapi_bucket_date_key(bucket: dict) -> str:
     if not isinstance(bucket, dict):
         return ""
@@ -883,7 +1013,7 @@ def _append_newapi_bucket_series(
             {
                 "timestamp": str(timestamp),
                 "request_count": 0,
-                "token_count": 0,
+                "token_count": None,
                 "quota_used": 0,
                 "estimated_amount": 0,
                 "estimated_cost_usd": 0,
@@ -893,8 +1023,10 @@ def _append_newapi_bucket_series(
         )
         amount = bucket.get("amount") or 0
         estimated_cost = bucket.get("estimated_cost_usd") or 0
+        token_count = _trusted_newapi_bucket_token_count(bucket)
         source_total["request_count"] += bucket.get("request_count") or 0
-        source_total["token_count"] += bucket.get("token_count") or 0
+        if token_count is not None:
+            source_total["token_count"] = (source_total["token_count"] or 0) + token_count
         source_total["quota_used"] += amount
         source_total["estimated_amount"] += amount
         source_total["estimated_cost_usd"] += estimated_cost

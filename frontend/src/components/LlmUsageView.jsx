@@ -74,9 +74,12 @@ export function LlmUsageView({ theme = 'dark' }) {
   const usageUnavailable = summary?.usage_supported === false
   const usagePartial = summary?.usage_scope === 'partial'
   const usageMessage = summary?.usage_message || series?.usage_message || ''
+  const tokenIncomplete = summary?.token_usage_complete === false || series?.token_usage_complete === false
+  const tokenUsageMessage = summary?.token_usage_message || series?.token_usage_message || ''
   const usageSeries = useMemo(() => filterUsageSeries(series?.series || []), [series])
   const usageModelSeries = useMemo(() => filterUsageSeries(series?.model_series || []), [series])
   const activityUsageSeries = useMemo(() => filterUsageSeries(activitySeries?.series || []), [activitySeries])
+  const activityTokenIncomplete = tokenIncomplete || activitySeries?.token_usage_complete === false
   const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
 
   return (
@@ -118,6 +121,12 @@ export function LlmUsageView({ theme = 'dark' }) {
           <span>{usageMessage}</span>
         </section>
       )}
+      {tokenIncomplete && (
+        <section className="llm-usage-notice partial">
+          <strong>Token采样</strong>
+          <span>{tokenUsageMessage}</span>
+        </section>
+      )}
 
       <div className="llm-kpi-grid">
         <Kpi label="官方消耗" value={usageUnavailable ? '--' : formatUsd(summary?.estimated_cost_usd)} hint={usageUnavailable ? '官方未提供用量统计' : '优先采用供应商统计'} highlight />
@@ -126,7 +135,7 @@ export function LlmUsageView({ theme = 'dark' }) {
         <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
       </div>
 
-      <PerformanceStrip summary={summary} models={models} usageUnavailable={usageUnavailable} />
+      <PerformanceStrip summary={summary} models={models} usageUnavailable={usageUnavailable} tokenIncomplete={tokenIncomplete} />
 
       <div className="llm-source-grid">
         {sourceGroups.map((group) => (
@@ -155,7 +164,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       />
 
       <div className="llm-insight-grid">
-        <ActivityHeatmap series={activityUsageSeries} usageUnavailable={usageUnavailable} />
+        <ActivityHeatmap series={activityUsageSeries} usageUnavailable={usageUnavailable} tokenIncomplete={activityTokenIncomplete} />
         <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(usageSeries)} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
       </div>
 
@@ -175,7 +184,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   )
 }
 
-function PerformanceStrip({ summary, models, usageUnavailable }) {
+function PerformanceStrip({ summary, models, usageUnavailable, tokenIncomplete }) {
   const health = summary?.snapshot_count ? '在线' : '等待数据'
   const top = usageUnavailable ? [] : models.slice(0, 3)
   return (
@@ -184,7 +193,7 @@ function PerformanceStrip({ summary, models, usageUnavailable }) {
       <span>状态 <b>{health}</b></span>
       <span>成功率 <b>{formatPercentFromHundred(summary?.success_rate)}</b></span>
       <span>平均RPM <b>{formatDecimal(summary?.avg_rpm)}</b></span>
-      <span>总Token <b>{usageUnavailable ? '--' : formatCompact(summary?.token_count)}</b></span>
+      <span>{tokenIncomplete ? '采样Token' : '总Token'} <b>{usageUnavailable ? '--' : formatCompact(summary?.token_count)}</b></span>
       <span>平均延迟 <b>{formatLatency(summary?.avg_latency_seconds)}</b></span>
       {top.map((item) => (
         <span className="model-pill" key={item.model}>{item.model} <b>{formatNumber(item.request_count)}次</b></span>
@@ -215,7 +224,7 @@ function UsageDistribution({ mode, onModeChange, total, series, range, granulari
   )
 }
 
-function ActivityHeatmap({ series, usageUnavailable }) {
+function ActivityHeatmap({ series, usageUnavailable, tokenIncomplete }) {
   const days = useMemo(() => activityDays(series), [series])
   const scrollRef = useRef(null)
   const max = Math.max(...days.map((day) => day.value), 0)
@@ -238,8 +247,8 @@ function ActivityHeatmap({ series, usageUnavailable }) {
               <span
                 key={day.key}
                 className={`activity-cell level-${activityLevel(day.value, max)} row-${index % 7} ${day.isToday ? 'today' : ''}`}
-                data-tooltip={`${day.key}：${formatNumber(day.value)}次请求，Token：${formatCompact(day.tokens)}`}
-                title={`${day.key}：${formatNumber(day.value)}次请求，Token：${formatCompact(day.tokens)}`}
+                data-tooltip={`${day.key}：${formatNumber(day.value)}次请求，${tokenIncomplete ? '采样Token' : 'Token'}：${formatCompact(day.tokens)}`}
+                title={`${day.key}：${formatNumber(day.value)}次请求，${tokenIncomplete ? '采样Token' : 'Token'}：${formatCompact(day.tokens)}`}
               />
             ))}
           </div>
