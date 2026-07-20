@@ -347,7 +347,7 @@ def llm_usage_summary(
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     snapshot_rows = _latest_llm_snapshot_rows(db, range, source_id, configured_source_ids)
     snapshots = [snapshot for snapshot, _source_row in snapshot_rows]
-    request_count = sum(point.request_count or 0 for point in snapshots)
+    request_count = sum(_snapshot_request_count(point, source_row) for point, source_row in snapshot_rows)
     token_count = sum(_snapshot_token_count(point, source_row) for point, source_row in snapshot_rows)
     amount = sum(point.estimated_amount or 0 for point in snapshots)
     estimated_cost = sum(_snapshot_cost(point) or 0 for point in snapshots)
@@ -868,10 +868,28 @@ def _snapshot_token_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource
     return total if seen else 0
 
 
+def _snapshot_request_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource) -> float:
+    if source_row.source_type != "newapi_admin":
+        return snapshot.request_count or 0
+    buckets = _newapi_snapshot_buckets(snapshot)
+    if not buckets:
+        return snapshot.request_count or 0
+    total = 0.0
+    seen = False
+    for bucket in buckets:
+        if not _is_trusted_newapi_bucket(bucket):
+            continue
+        total += _number_from_any(bucket, ["request_count"]) or 0
+        seen = True
+    return total if seen else 0
+
+
+def _is_trusted_newapi_bucket(bucket: dict) -> bool:
+    return isinstance(bucket, dict) and ("input_tokens" in bucket or "output_tokens" in bucket)
+
+
 def _trusted_newapi_bucket_token_count(bucket: dict) -> float | None:
-    if not isinstance(bucket, dict):
-        return None
-    if "input_tokens" not in bucket and "output_tokens" not in bucket:
+    if not _is_trusted_newapi_bucket(bucket):
         return None
     return (_number_from_any(bucket, ["input_tokens"]) or 0) + (_number_from_any(bucket, ["output_tokens"]) or 0)
 
@@ -934,7 +952,10 @@ def _llm_token_usage_status(rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]])
 
 def _newapi_has_untrusted_bucket_tokens(snapshot: LlmUsageSnapshot) -> bool:
     for bucket in _newapi_snapshot_buckets(snapshot):
-        if _trusted_newapi_bucket_token_count(bucket) is None and _number_from_any(bucket, ["token_count"]) not in (None, 0):
+        if _trusted_newapi_bucket_token_count(bucket) is None and (
+            _number_from_any(bucket, ["request_count"]) not in (None, 0)
+            or _number_from_any(bucket, ["token_count"]) not in (None, 0)
+        ):
             return True
     return False
 
@@ -1004,6 +1025,8 @@ def _append_newapi_bucket_series(
     source_totals: dict[str, dict] = {}
     for bucket in buckets:
         if not isinstance(bucket, dict):
+            continue
+        if not _is_trusted_newapi_bucket(bucket):
             continue
         timestamp = bucket.get("timestamp")
         if not timestamp:

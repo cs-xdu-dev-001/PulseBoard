@@ -757,6 +757,8 @@ def test_llm_usage_series_uses_newapi_log_buckets_instead_of_snapshot_time(monke
                                 "model": "gpt-5.5",
                                 "request_count": 3,
                                 "token_count": 30,
+                                "input_tokens": 18,
+                                "output_tokens": 12,
                                 "amount": 1500,
                                 "estimated_cost_usd": 0.003,
                                 "pricing_basis": "newapi_quota",
@@ -821,6 +823,8 @@ def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatc
                                     "model": "gpt-5.5",
                                     "request_count": requests,
                                     "token_count": requests * 10,
+                                    "input_tokens": requests * 6,
+                                    "output_tokens": requests * 4,
                                     "amount": requests * 500,
                                     "estimated_cost_usd": requests * 0.001,
                                     "pricing_basis": "newapi_quota",
@@ -901,7 +905,7 @@ def test_llm_usage_summary_reports_newapi_truncated_logs(monkeypatch):
     assert series["logs_truncated"] is True
 
 
-def test_llm_usage_series_ignores_legacy_newapi_bucket_token_count(monkeypatch):
+def test_llm_usage_series_ignores_legacy_newapi_bucket_usage(monkeypatch):
     mock_academic_config(monkeypatch)
     client, session_factory = make_client()
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -919,19 +923,19 @@ def test_llm_usage_series_ignores_legacy_newapi_bucket_token_count(monkeypatch):
                 source_id=source.id,
                 collected_at=now + timedelta(minutes=5),
                 range_key="latest",
-                request_count=1,
-                token_count=294_000_000_000,
+                request_count=304_506_576,
+                token_count=375_570_000_000,
                 quota_used=100,
                 estimated_amount=0.0002,
-                model_stats=[{"model": "gpt-5.5", "request_count": 1, "token_count": 294_000_000_000, "amount": 100}],
+                model_stats=[{"model": "gpt-5.5", "request_count": 304_506_576, "token_count": 375_570_000_000, "amount": 100}],
                 raw_summary={
                     "newapi": {
                         "buckets": [
                             {
                                 "timestamp": now.isoformat(),
                                 "model": "gpt-5.5",
-                                "request_count": 1,
-                                "token_count": 294_000_000_000,
+                                "request_count": 304_506_576,
+                                "token_count": 375_570_000_000,
                                 "amount": 100,
                                 "estimated_cost_usd": 0.0002,
                                 "pricing_basis": "newapi_quota",
@@ -946,10 +950,11 @@ def test_llm_usage_series_ignores_legacy_newapi_bucket_token_count(monkeypatch):
     summary = client.get("/api/llm/usage/summary?range=today").json()
     series = client.get("/api/llm/usage/series?range=today").json()
 
+    assert summary["request_count"] == 0
     assert summary["token_count"] == 0
     assert summary["token_usage_complete"] is False
     assert summary["token_usage_scope"] == "untrusted_legacy_logs"
-    assert series["series"][0]["points"][0]["token_count"] is None
+    assert series["series"][0]["points"] == []
 
 
 def test_llm_usage_series_limits_points_per_source(monkeypatch):
