@@ -9,6 +9,7 @@ const ranges = [
   { value: '29d', label: '29天' },
 ]
 
+const activityRange = '29d'
 const modelColors = ['#22c55e', '#f97316', '#38bdf8', '#2563eb', '#8b5cf6', '#f43f5e', '#14b8a6', '#eab308']
 
 export function LlmUsageView({ theme = 'dark' }) {
@@ -17,6 +18,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [sources, setSources] = useState([])
   const [summary, setSummary] = useState(null)
   const [series, setSeries] = useState(null)
+  const [activitySeries, setActivitySeries] = useState(null)
   const [models, setModels] = useState([])
   const [expandedProviders, setExpandedProviders] = useState({})
   const [costChartMode, setCostChartMode] = useState('bar')
@@ -27,15 +29,17 @@ export function LlmUsageView({ theme = 'dark' }) {
 
   async function load(nextSource = source) {
     try {
-      const [nextSources, nextSummary, nextSeries, nextModels] = await Promise.all([
+      const [nextSources, nextSummary, nextSeries, nextModels, nextActivitySeries] = await Promise.all([
         fetchLlmSources(),
         fetchLlmSummary(range, nextSource),
         fetchLlmSeries(range, nextSource),
         fetchLlmModels(range, nextSource),
+        fetchLlmSeries(activityRange, nextSource),
       ])
       setSources(nextSources.sources || [])
       setSummary(nextSummary)
       setSeries(nextSeries)
+      setActivitySeries(nextActivitySeries)
       setModels(nextModels.models || [])
       setError(null)
     } catch (err) {
@@ -72,6 +76,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   const usageMessage = summary?.usage_message || series?.usage_message || ''
   const usageSeries = useMemo(() => filterUsageSeries(series?.series || []), [series])
   const usageModelSeries = useMemo(() => filterUsageSeries(series?.model_series || []), [series])
+  const activityUsageSeries = useMemo(() => filterUsageSeries(activitySeries?.series || []), [activitySeries])
   const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
 
   return (
@@ -150,7 +155,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       />
 
       <div className="llm-insight-grid">
-        <ActivityHeatmap series={usageSeries} usageUnavailable={usageUnavailable} />
+        <ActivityHeatmap series={activityUsageSeries} usageUnavailable={usageUnavailable} />
         <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(usageSeries)} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
       </div>
 
