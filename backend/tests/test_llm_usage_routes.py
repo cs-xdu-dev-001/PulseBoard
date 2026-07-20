@@ -12,6 +12,22 @@ from app.main import app
 from app.models import LlmUsageSnapshot, LlmUsageSource
 
 
+def mock_academic_config(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "academic",
+                "provider_id": "academic",
+                "provider_name": "Academic Gateway",
+                "display_name": "Academic Gateway",
+                "source_type": "newapi_admin",
+            }
+        ],
+    )
+
+
 def make_client():
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -435,7 +451,8 @@ def test_llm_usage_aggregates_can_filter_by_provider_or_key(tmp_path, monkeypatc
     assert key_summary["request_count"] == 100
 
 
-def test_llm_usage_summary_and_models_return_aggregates():
+def test_llm_usage_summary_and_models_return_aggregates(monkeypatch):
+    mock_academic_config(monkeypatch)
     client, session_factory = make_client()
     seed_llm(session_factory)
 
@@ -451,7 +468,8 @@ def test_llm_usage_summary_and_models_return_aggregates():
     assert models["models"][0]["estimated_cost_usd"] == 0.000024
 
 
-def test_llm_usage_summary_prefers_newapi_official_quota_amount():
+def test_llm_usage_summary_prefers_newapi_official_quota_amount(monkeypatch):
+    mock_academic_config(monkeypatch)
     client, session_factory = make_client()
     now = datetime.now(timezone.utc)
     with session_factory() as db:
@@ -681,7 +699,8 @@ def test_llm_usage_summary_marks_mixed_sources_as_partial_usage(monkeypatch):
     assert [item["source_id"] for item in series["series"]] == ["academic-main"]
 
 
-def test_llm_usage_series_includes_model_area_series():
+def test_llm_usage_series_includes_model_area_series(monkeypatch):
+    mock_academic_config(monkeypatch)
     client, session_factory = make_client()
     seed_llm(session_factory)
 
@@ -820,7 +839,8 @@ def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatc
     assert [point["request_count"] for point in points] == [7, 3]
 
 
-def test_llm_usage_series_limits_points_per_source():
+def test_llm_usage_series_limits_points_per_source(monkeypatch):
+    mock_academic_config(monkeypatch)
     client, session_factory = make_client()
     now = datetime.now(timezone.utc)
     with session_factory() as db:
