@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     failure_degraded_threshold: int = 3
     failure_unreachable_threshold: int = 12
     collector_enabled: bool = True
+    gpu_model_filter: str = ""
     lab_timezone: str = "Asia/Shanghai"
     node_exporters: str = ""
     node_exporter_interval_seconds: int = 30

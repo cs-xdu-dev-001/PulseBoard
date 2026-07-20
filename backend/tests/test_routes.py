@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import get_settings
 from app.db import Base, get_db
 from app.main import app
 from app.models import DataSource, Gpu, GpuMetric, Machine, MachineMetric, VpsMetric, VpsNode
@@ -198,6 +199,48 @@ def test_gpu_history_returns_points_for_requested_range():
     assert payload["series"][0]["points"][0]["utilization"] == 10
     assert payload["series"][0]["points"][1]["utilization"] == 5
     assert all(point["utilization"] != 99 for point in payload["series"][0]["points"])
+
+
+def test_gpu_model_filter_limits_dashboard_and_history(monkeypatch):
+    monkeypatch.setenv("PULSEBOARD_GPU_MODEL_FILTER", "A100")
+    get_settings.cache_clear()
+    client, session_factory = make_client()
+    seed_dashboard(session_factory)
+    now = datetime.now(timezone.utc)
+    try:
+        with session_factory() as db:
+            machine = db.query(Machine).one()
+            gpu = Gpu(
+                machine_id=machine.id,
+                gpu_index=1,
+                name="NVIDIA GeForce RTX 2080 Ti",
+                memory_total_mb=11264,
+                current_status="available",
+                last_seen_at=now,
+            )
+            db.add(gpu)
+            db.flush()
+            db.add(
+                GpuMetric(
+                    gpu_id=gpu.id,
+                    collected_at=now,
+                    utilization=0,
+                    memory_total_mb=11264,
+                    memory_used_mb=1,
+                    status="available",
+                )
+            )
+            db.commit()
+
+        current = client.get("/api/dashboard/current").json()
+        history = client.get("/api/history/gpus?range=1h").json()
+
+        assert current["summary"]["gpus_total"] == 1
+        assert current["summary"]["available_gpus"] == 1
+        assert [gpu["name"] for gpu in current["gpus"]] == ["NVIDIA A100 80GB PCIe"]
+        assert [series["name"] for series in history["series"]] == ["NVIDIA A100 80GB PCIe"]
+    finally:
+        get_settings.cache_clear()
 
 
 def test_machine_history_deduplicates_same_timestamp_points():

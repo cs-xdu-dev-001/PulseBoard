@@ -126,6 +126,8 @@ def gpu_history(range: Literal["1h", "24h"] = Query("1h"), db: Session = Depends
     gpus = db.scalars(select(Gpu).join(Machine).order_by(Machine.name, Gpu.gpu_index)).all()
     series = []
     for gpu in gpus:
+        if not _gpu_matches_model_filter(gpu):
+            continue
         points = db.scalars(
             select(GpuMetric)
             .where(GpuMetric.gpu_id == gpu.id, GpuMetric.collected_at >= since, GpuMetric.collected_at <= until)
@@ -602,6 +604,8 @@ def _current_gpus(db: Session, source_status: str, until: datetime) -> list[dict
     gpus = db.scalars(select(Gpu).join(Machine).order_by(Machine.name, Gpu.gpu_index)).all()
     result = []
     for gpu in gpus:
+        if not _gpu_matches_model_filter(gpu):
+            continue
         latest = db.scalar(
             select(GpuMetric)
             .where(GpuMetric.gpu_id == gpu.id, GpuMetric.collected_at <= until)
@@ -979,6 +983,14 @@ def _gateway_forward_payload(payload: dict, resource: str) -> dict:
             stream_options = {}
         result["stream_options"] = {**stream_options, "include_usage": True}
     return result
+
+
+def _gpu_matches_model_filter(gpu: Gpu) -> bool:
+    filters = [item.strip().lower() for item in get_settings().gpu_model_filter.split(",") if item.strip()]
+    if not filters:
+        return True
+    name = (gpu.name or "").lower()
+    return any(item in name for item in filters)
 
 
 def _gateway_usage_result(
