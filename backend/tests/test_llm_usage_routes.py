@@ -757,6 +757,69 @@ def test_llm_usage_series_uses_newapi_log_buckets_instead_of_snapshot_time(monke
     assert payload["model_series"][0]["points"][0]["request_count"] == 3
 
 
+def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "academic",
+                "provider_id": "academic",
+                "provider_name": "EduModel",
+                "display_name": "Academic Gateway",
+                "source_type": "newapi_admin",
+            }
+        ],
+    )
+    client, session_factory = make_client()
+    today = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    yesterday = today - timedelta(days=1)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        for timestamp, requests in ((yesterday, 7), (today, 3)):
+            db.add(
+                LlmUsageSnapshot(
+                    source_id=source.id,
+                    collected_at=timestamp + timedelta(hours=1),
+                    range_key="latest",
+                    request_count=requests,
+                    token_count=requests * 10,
+                    quota_used=requests * 500,
+                    estimated_amount=requests * 0.001,
+                    model_stats=[{"model": "gpt-5.5", "request_count": requests, "token_count": requests * 10, "amount": requests * 500}],
+                    raw_summary={
+                        "newapi": {
+                            "buckets": [
+                                {
+                                    "timestamp": timestamp.isoformat(),
+                                    "model": "gpt-5.5",
+                                    "request_count": requests,
+                                    "token_count": requests * 10,
+                                    "amount": requests * 500,
+                                    "estimated_cost_usd": requests * 0.001,
+                                    "pricing_basis": "newapi_quota",
+                                }
+                            ]
+                        }
+                    },
+                )
+            )
+        db.commit()
+
+    payload = client.get("/api/llm/usage/series?range=7d").json()
+    points = payload["series"][0]["points"]
+
+    assert [point["timestamp"] for point in points] == [yesterday.isoformat(), today.isoformat()]
+    assert [point["request_count"] for point in points] == [7, 3]
+
+
 def test_llm_usage_series_limits_points_per_source():
     client, session_factory = make_client()
     now = datetime.now(timezone.utc)

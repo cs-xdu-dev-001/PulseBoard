@@ -384,15 +384,19 @@ def llm_usage_series(
     )
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
-    latest_bucket_snapshot_ids = _latest_newapi_bucket_snapshot_ids(rows)
+    latest_bucket_snapshot_ids = _latest_newapi_bucket_snapshot_ids_by_day(rows)
     for row, source_row in rows:
         if source_row.source_type == "deepseek_balance":
             continue
         newapi_buckets = _newapi_snapshot_buckets(row)
-        if newapi_buckets and latest_bucket_snapshot_ids.get(source_row.id) == row.id:
-            _append_newapi_bucket_series(series_by_source, series_by_model, row, source_row, newapi_buckets)
-            continue
         if newapi_buckets:
+            filtered_buckets = [
+                bucket
+                for bucket in newapi_buckets
+                if latest_bucket_snapshot_ids.get((source_row.id, _newapi_bucket_date_key(bucket))) == row.id
+            ]
+            if filtered_buckets:
+                _append_newapi_bucket_series(series_by_source, series_by_model, row, source_row, filtered_buckets)
             continue
         item = series_by_source.setdefault(
             source_row.id,
@@ -805,22 +809,46 @@ def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
     return model_cost
 
 
-def _latest_newapi_bucket_snapshot_ids(rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]]) -> dict[int, int]:
-    latest: dict[int, tuple[datetime, int]] = {}
+def _latest_newapi_bucket_snapshot_ids_by_day(
+    rows: list[tuple[LlmUsageSnapshot, LlmUsageSource]],
+) -> dict[tuple[int, str], int]:
+    latest: dict[tuple[int, str], tuple[datetime, int]] = {}
     for row, source_row in rows:
-        if source_row.source_type != "newapi_admin" or not _newapi_snapshot_buckets(row):
+        buckets = _newapi_snapshot_buckets(row)
+        if source_row.source_type != "newapi_admin" or not buckets:
             continue
-        current = latest.get(source_row.id)
-        value = (row.collected_at, row.id)
-        if current is None or value > current:
-            latest[source_row.id] = value
-    return {source_id: snapshot_id for source_id, (_collected_at, snapshot_id) in latest.items()}
+        for bucket in buckets:
+            date_key = _newapi_bucket_date_key(bucket)
+            if not date_key:
+                continue
+            key = (source_row.id, date_key)
+            current = latest.get(key)
+            value = (row.collected_at, row.id)
+            if current is None or value > current:
+                latest[key] = value
+    return {key: snapshot_id for key, (_collected_at, snapshot_id) in latest.items()}
 
 
 def _newapi_snapshot_buckets(snapshot: LlmUsageSnapshot) -> list[dict]:
     newapi = (snapshot.raw_summary or {}).get("newapi")
     buckets = newapi.get("buckets") if isinstance(newapi, dict) else None
     return buckets if isinstance(buckets, list) else []
+
+
+def _newapi_bucket_date_key(bucket: dict) -> str:
+    if not isinstance(bucket, dict):
+        return ""
+    timestamp = bucket.get("timestamp")
+    if not timestamp:
+        return ""
+    text = str(timestamp)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text[:10]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().date().isoformat()
 
 
 def _append_newapi_bucket_series(

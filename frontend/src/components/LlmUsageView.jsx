@@ -744,23 +744,14 @@ function activityTodayScrollLeft(days) {
 function dailySourceTotals(series) {
   const totals = new Map()
   for (const item of series || []) {
-    const latestByDay = new Map()
     for (const point of item.points || []) {
       const date = new Date(point.timestamp)
       if (Number.isNaN(date.getTime())) continue
       const key = localDateKey(date)
-      const value = {
-        requests: Number(point.request_count) || 0,
-        tokens: Number(point.token_count) || 0,
-      }
-      const current = latestByDay.get(key)
-      if (!current || date > current.date) latestByDay.set(key, { date, value })
-    }
-    for (const [key, itemValue] of latestByDay.entries()) {
       const current = totals.get(key) || { requests: 0, tokens: 0 }
       totals.set(key, {
-        requests: current.requests + itemValue.value.requests,
-        tokens: current.tokens + itemValue.value.tokens,
+        requests: current.requests + (Number(point.request_count) || 0),
+        tokens: current.tokens + (Number(point.token_count) || 0),
       })
     }
   }

@@ -299,6 +299,10 @@ it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
 })
 
 it('LLM看板按New API风格展示活动热力图和模型分析视图', async () => {
+  const todayMorning = new Date()
+  todayMorning.setHours(9, 0, 0, 0)
+  const todayNoon = new Date()
+  todayNoon.setHours(12, 0, 0, 0)
   fetchLlmSummary.mockResolvedValue({
     estimated_cost_usd: 12.34,
     request_count: 1784,
@@ -312,7 +316,8 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
         display_name: '主Key',
         points: [
           { timestamp: '2026-07-17T10:00:00Z', request_count: 30, estimated_cost_usd: 2 },
-          { timestamp: new Date().toISOString(), request_count: 120, token_count: 12_345_678, estimated_cost_usd: 10 },
+          { timestamp: todayMorning.toISOString(), request_count: 120, token_count: 12_345_678, estimated_cost_usd: 10 },
+          { timestamp: todayNoon.toISOString(), request_count: 80, token_count: 1_000_000, estimated_cost_usd: 2 },
         ],
       },
     ],
@@ -348,7 +353,7 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
   expect(screen.getByText('模型调用分析')).toBeVisible()
   expect(screen.getByText('成功率')).toBeVisible()
   expect(screen.getByText((_content, element) => element?.textContent === '1,200次')).toBeVisible()
-  expect(screen.getByTitle(/Token：12.35M/)).toBeVisible()
+  expect(screen.getByTitle(/200次请求，Token：13.35M/)).toBeVisible()
   expect(screen.queryByText('82.19%')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: '调用趋势' })).toBeVisible()
   expect(screen.getByRole('button', { name: '调用次数分布' })).toBeVisible()
@@ -357,7 +362,7 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
   expect(screen.getByTitle(/2026-12-31：0次请求，Token：0.00/)).toBeVisible()
   expect(screen.getByTitle(/2026-01-01：0次请求，Token：0.00/)).toHaveClass('row-0')
   expect(screen.getByTitle(/2026-01-02：0次请求，Token：0.00/)).toHaveClass('row-1')
-  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：.*Token：12.35M`))).toHaveClass('today')
+  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：200次请求，Token：13.35M`))).toHaveClass('today')
   expect(screen.getByLabelText('月度活动，横向滚动').scrollTo).toHaveBeenCalledWith({ left: expect.any(Number), behavior: 'auto' })
 })
 
