@@ -473,6 +473,41 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
   expect(screen.getByLabelText('月度活动，横向滚动').scrollTo).toHaveBeenCalledWith({ left: expect.any(Number), behavior: 'auto' })
 })
 
+it('全部来源混合DeepSeek和NewAPI时不把CNY消耗显示成美元', async () => {
+  fetchLlmSummary.mockResolvedValue({
+    estimated_cost_usd: 385.2616,
+    request_count: 242700,
+  })
+  fetchLlmSeries.mockResolvedValue({
+    series: [],
+    model_series: [
+      {
+        model: 'deepseek-v4-flash',
+        display_name: 'deepseek-v4-flash',
+        points: [{ timestamp: new Date().toISOString(), request_count: 241157, estimated_cost_usd: 313.9153, pricing_basis: 'deepseek_platform_cny' }],
+      },
+      {
+        model: 'gpt-5.5',
+        display_name: 'gpt-5.5',
+        points: [{ timestamp: new Date().toISOString(), request_count: 142, estimated_cost_usd: 5.8267, pricing_basis: 'newapi_quota' }],
+      },
+    ],
+  })
+  fetchLlmModels.mockResolvedValue({
+    models: [
+      { model: 'deepseek-v4-flash', request_count: 241157, amount: 313.9153, estimated_cost_usd: 313.9153, pricing_basis: 'deepseek_platform_cny' },
+      { model: 'gpt-5.5', request_count: 142, amount: 5.8267, estimated_cost_usd: 5.8267, pricing_basis: 'newapi_quota' },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  await waitFor(() => expect(screen.getAllByText('CNY 313.92 / USD 5.83').length).toBeGreaterThan(0))
+  expect(screen.queryByText('$385.2616')).not.toBeInTheDocument()
+  expect(screen.getByText('混合币种，请选择单个供应商查看消耗分布')).toBeVisible()
+  expect(screen.getByText('CNY 313.92')).toBeVisible()
+})
+
 function localDateKey(date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')

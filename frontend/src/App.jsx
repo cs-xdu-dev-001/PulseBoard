@@ -10,6 +10,11 @@ import { SettingsView } from './components/SettingsView.jsx'
 const refreshMs = 15000
 const historyRefreshMs = 30000
 const themeStorageKey = 'pulseboard-theme'
+const pageTitles = {
+  infra: 'Infrastructure Console',
+  llm: 'LLM Usage Console',
+  settings: 'Settings Console',
+}
 
 function getInitialTheme() {
   if (typeof window === 'undefined') return 'dark'
@@ -98,7 +103,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">PulseBoard</p>
-          <h1>Infrastructure Console</h1>
+          <h1>{pageTitles[activeTab]}</h1>
         </div>
         <div className="topbar-actions">
           <button

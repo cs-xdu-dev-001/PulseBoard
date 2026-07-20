@@ -110,6 +110,11 @@ export function LlmUsageView({ theme = 'dark' }) {
   const activityUsageSeries = useMemo(() => filterUsageSeries(activitySeries?.series || []), [activitySeries])
   const activityTokenIncomplete = tokenIncomplete || activitySeries?.token_usage_complete === false
   const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
+  const costSummary = useMemo(
+    () => usageUnavailable ? null : costSummaryFromModels(models, summary?.estimated_cost_usd),
+    [models, summary, usageUnavailable],
+  )
+  const costDisplay = usageUnavailable ? '--' : formatCostSummary(costSummary)
 
   return (
     <section className="llm-view">
@@ -158,7 +163,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       )}
 
       <div className="llm-kpi-grid">
-        <Kpi label="官方消耗" value={usageUnavailable ? '--' : formatUsd(summary?.estimated_cost_usd)} hint={usageUnavailable ? '官方未提供用量统计' : '优先采用供应商统计'} highlight />
+        <Kpi label="官方消耗" value={costDisplay} hint={usageUnavailable ? '官方未提供用量统计' : costSummaryHint(costSummary)} highlight />
         <Kpi label="总请求数" value={usageUnavailable ? '--' : formatNumber(summary?.request_count)} hint={usageUnavailable ? '用量不可用' : '统计周期内调用'} />
         <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="供应商账户去重" />
         <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
@@ -184,12 +189,13 @@ export function LlmUsageView({ theme = 'dark' }) {
       <UsageDistribution
         mode={costChartMode}
         onModeChange={setCostChartMode}
-        total={formatUsd(summary?.estimated_cost_usd)}
+        total={costDisplay}
         series={usageModelSeries}
         range={range}
         granularity={granularity}
         theme={theme}
         usageUnavailable={usageUnavailable}
+        costSummary={costSummary}
       />
 
       <div className="llm-insight-grid">
@@ -231,9 +237,11 @@ function PerformanceStrip({ summary, models, usageUnavailable, tokenIncomplete }
   )
 }
 
-function UsageDistribution({ mode, onModeChange, total, series, range, granularity, theme, usageUnavailable }) {
+function UsageDistribution({ mode, onModeChange, total, series, range, granularity, theme, usageUnavailable, costSummary }) {
   const buckets = useMemo(() => chartBuckets(range, granularity), [range, granularity])
   const chartSeries = useMemo(() => timeBucketSeries(series, 'estimated_cost_usd', buckets, 6), [series, buckets])
+  const costFormatter = (value) => formatCostValue(value, costSummary)
+  const mixedCurrency = costSummary?.kind === 'mixed'
   return (
     <ChartPanel
       title="消耗分布"
@@ -248,7 +256,9 @@ function UsageDistribution({ mode, onModeChange, total, series, range, granulari
     >
       {usageUnavailable
         ? <div className="empty-panel chart-empty">官方未提供用量统计</div>
-        : <EChart option={timeSeriesOption({ title: '消耗分布', series: chartSeries, buckets, metric: 'value', formatter: formatUsd, theme, mode })} className="llm-wide-chart" />}
+        : mixedCurrency
+          ? <div className="empty-panel chart-empty">混合币种，请选择单个供应商查看消耗分布</div>
+          : <EChart option={timeSeriesOption({ title: '消耗分布', series: chartSeries, buckets, metric: 'value', formatter: costFormatter, theme, mode })} className="llm-wide-chart" />}
     </ChartPanel>
   )
 }
@@ -464,7 +474,7 @@ function ModelTable({ models, usageUnavailable }) {
           {models.map((item) => (
             <tr key={item.model}>
               <td>{item.model}</td>
-              <td className="money-cell">{formatUsd(item.estimated_cost_usd)}</td>
+              <td className="money-cell">{formatModelCost(item)}</td>
               <td>{formatNumber(item.request_count)}</td>
               <td>{formatCompact(item.amount)}</td>
               <td>{basisText(item.pricing_basis)}</td>
@@ -964,6 +974,52 @@ function basisText(value) {
   }[value] || value || '--'
 }
 
+function costSummaryFromModels(models, fallbackUsd) {
+  const totals = new Map()
+  for (const item of models || []) {
+    const value = Number(item.estimated_cost_usd)
+    if (!Number.isFinite(value)) continue
+    const currency = currencyForPricingBasis(item.pricing_basis)
+    totals.set(currency, (totals.get(currency) || 0) + value)
+  }
+  if (!totals.size && fallbackUsd != null) {
+    const value = Number(fallbackUsd)
+    if (Number.isFinite(value)) totals.set('USD', value)
+  }
+  const values = Array.from(totals.entries())
+    .map(([currency, value]) => ({ currency, value }))
+    .filter((item) => item.value !== 0)
+    .sort((a, b) => a.currency.localeCompare(b.currency))
+  if (!values.length) return { kind: 'single', currency: 'USD', value: 0 }
+  if (values.length === 1) return { kind: 'single', currency: values[0].currency, value: values[0].value }
+  return { kind: 'mixed', values }
+}
+
+function currencyForPricingBasis(value) {
+  if (value === 'deepseek_platform_cny') return 'CNY'
+  return 'USD'
+}
+
+function costSummaryHint(summary) {
+  if (summary?.kind === 'mixed') return '按币种分开显示'
+  return '优先采用供应商统计'
+}
+
+function formatCostSummary(summary) {
+  if (!summary) return '--'
+  if (summary.kind === 'mixed') return summary.values.map((item) => formatCostMoney(item.value, item.currency)).join(' / ')
+  return formatCostMoney(summary.value, summary.currency)
+}
+
+function formatCostValue(value, summary) {
+  if (summary?.kind === 'single') return formatCostMoney(value, summary.currency)
+  return formatUsd(value)
+}
+
+function formatModelCost(item) {
+  return formatCostMoney(item.estimated_cost_usd, currencyForPricingBasis(item.pricing_basis))
+}
+
 function formatPercentFromHundred(value) {
   if (value == null) return '--'
   return `${Number(value).toFixed(2)}%`
@@ -993,6 +1049,11 @@ function formatMoney(value, currency = '') {
   if (value == null) return '--'
   const prefix = currency ? `${currency} ` : ''
   return `${prefix}${Number(value).toFixed(2)}`
+}
+
+function formatCostMoney(value, currency = 'USD') {
+  if (value == null) return '--'
+  return `${currency} ${Number(value).toFixed(2)}`
 }
 
 function formatCompact(value) {
