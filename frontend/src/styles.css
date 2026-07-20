@@ -1610,13 +1610,16 @@ footer {
 
 .activity-panel {
   min-height: 342px;
+  background:
+    radial-gradient(circle at 72% 18%, rgba(56, 189, 248, 0.18), transparent 26%),
+    linear-gradient(90deg, rgba(4, 10, 20, 0.98), rgba(8, 19, 34, 0.96) 46%, rgba(11, 38, 62, 0.68));
 }
 
 .activity-scroll {
   overflow-x: auto;
   overflow-y: visible;
   padding: 28px 26px 24px;
-  scrollbar-color: rgba(57, 255, 157, 0.48) rgba(255, 255, 255, 0.06);
+  scrollbar-color: rgba(125, 211, 252, 0.56) rgba(255, 255, 255, 0.06);
   scrollbar-width: thin;
 }
 
@@ -1631,8 +1634,8 @@ footer {
 
 .activity-scroll::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(56, 189, 248, 0.62), rgba(57, 255, 157, 0.78));
-  box-shadow: 0 0 14px rgba(57, 255, 157, 0.22);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.58), rgba(125, 211, 252, 0.86));
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.24);
 }
 
 .activity-canvas {
@@ -1657,10 +1660,10 @@ footer {
   position: relative;
   width: var(--activity-cell);
   height: var(--activity-cell);
-  border: 1px solid rgba(139, 220, 255, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.11);
   border-radius: 5px;
-  background: rgba(139, 220, 255, 0.085);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025), 0 0 10px rgba(56, 189, 248, 0.04);
+  background: rgba(30, 58, 95, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.018), 0 0 10px rgba(56, 189, 248, 0.035);
 }
 
 .activity-cell:hover {
@@ -1679,7 +1682,7 @@ footer {
   border: 1px solid rgba(139, 220, 255, 0.22);
   border-radius: 8px;
   background: rgba(7, 12, 24, 0.96);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3), 0 0 20px rgba(57, 255, 157, 0.12);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3), 0 0 20px rgba(56, 189, 248, 0.16);
   color: #e8fbff;
   font-size: 12px;
   line-height: 1.45;
@@ -1695,32 +1698,32 @@ footer {
 }
 
 .activity-cell.level-1 {
-  border-color: rgba(56, 189, 248, 0.3);
-  background: rgba(37, 99, 235, 0.34);
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.14);
+  border-color: rgba(59, 130, 246, 0.28);
+  background: rgba(30, 64, 132, 0.46);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.1);
 }
 
 .activity-cell.level-2 {
-  border-color: rgba(56, 189, 248, 0.46);
-  background: rgba(14, 165, 233, 0.56);
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.22);
+  border-color: rgba(59, 130, 246, 0.42);
+  background: rgba(37, 99, 235, 0.64);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.18);
 }
 
 .activity-cell.level-3 {
-  border-color: rgba(125, 211, 252, 0.66);
-  background: rgba(56, 189, 248, 0.76);
-  box-shadow: 0 0 18px rgba(56, 189, 248, 0.34);
+  border-color: rgba(96, 165, 250, 0.62);
+  background: rgba(59, 130, 246, 0.82);
+  box-shadow: 0 0 18px rgba(96, 165, 250, 0.28);
 }
 
 .activity-cell.level-4 {
-  border-color: rgba(186, 230, 253, 0.82);
-  background: #38bdf8;
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.48);
+  border-color: rgba(224, 242, 254, 0.88);
+  background: #bae6fd;
+  box-shadow: 0 0 22px rgba(125, 211, 252, 0.5);
 }
 
 .activity-cell.today {
   border-color: rgba(232, 251, 255, 0.92);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.48), 0 0 24px rgba(56, 189, 248, 0.42);
+  box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.52), 0 0 24px rgba(125, 211, 252, 0.42);
 }
 
 .activity-months {
