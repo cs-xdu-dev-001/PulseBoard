@@ -497,8 +497,8 @@ def normalize_newapi(config: LlmUsageConfig, payloads: dict[str, Any]) -> LlmUsa
         None if has_token_scope else _first_number(dashboard, ["token", "tokens", "token_count", "total_tokens"]),
     )
     quota_used = _coalesce_number(
-        _first_number(token_usage, ["total_used", "used_quota", "quota_used"]),
         _first_number(stat, ["quota", "used_quota", "quota_used", "amount"]),
+        _first_number(token_usage, ["total_used", "used_quota", "quota_used"]),
         None if has_token_scope else _first_number(dashboard, ["used_quota", "quota_used", "amount"]),
     )
     rpm = _first_number(stat, ["rpm", "request_rpm"])

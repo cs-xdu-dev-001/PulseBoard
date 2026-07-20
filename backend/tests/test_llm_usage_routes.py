@@ -921,7 +921,7 @@ def test_llm_usage_series_ignores_legacy_newapi_bucket_usage(monkeypatch):
         db.add(
             LlmUsageSnapshot(
                 source_id=source.id,
-                collected_at=now + timedelta(minutes=5),
+                collected_at=now,
                 range_key="latest",
                 request_count=304_506_576,
                 token_count=375_570_000_000,

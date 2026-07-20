@@ -555,6 +555,66 @@ def test_collect_newapi_uses_user_token_search_when_access_token_is_configured(m
     assert [item["model"] for item in result.model_stats] == ["gpt-5.6-sol", "deepseek-chat"]
 
 
+def test_collect_newapi_prefers_period_stat_quota_over_token_lifetime_usage(monkeypatch):
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "/api/user/self" in self.url:
+                return {"success": True, "data": {"quota": 24_430_000, "used_quota": 20_668}}
+            if "/api/token/search" in self.url:
+                return {
+                    "success": True,
+                    "data": {
+                        "items": [
+                            {
+                                "name": "codex-key",
+                                "used_quota": 9_999_999,
+                                "remain_quota": 1_600_000,
+                            }
+                        ]
+                    },
+                }
+            if "/api/log/self/stat" in self.url:
+                return {"success": True, "data": {"quota": 128_000_000, "rpm": 2, "tpm": 250}}
+            if "/api/log/self" in self.url:
+                return {"success": True, "data": {"items": []}}
+            return {"success": True, "data": []}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    result = collect_newapi(
+        LlmUsageConfig(
+            "academic-main",
+            "Codex",
+            "newapi_admin",
+            base_url="https://example",
+            api_key="sk-token-key",
+            access_token="account-token",
+        )
+    )
+
+    assert result.quota_used == 128_000_000
+    assert result.estimated_amount == 256
+
+
 def test_collect_newapi_paginates_user_scoped_logs(monkeypatch):
     requested = []
 
