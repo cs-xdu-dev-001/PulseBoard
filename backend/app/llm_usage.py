@@ -770,15 +770,10 @@ def _model_stats_from(value: Any) -> list[dict[str, Any]]:
                 "pricing_basis": "unknown",
             },
         )
-        grouped_item["request_count"] += _coalesce_number(
-            _number_from_keys(item, ["count", "request_count", "total_count"]),
-            1,
-        )
+        grouped_item["request_count"] += _request_count_from_model_row(item)
         input_tokens = _number_from_keys(item, ["input_tokens", "prompt_tokens"])
         output_tokens = _number_from_keys(item, ["output_tokens", "completion_tokens"])
-        token_count = _number_from_keys(item, ["token", "tokens", "token_count", "total_tokens", "total_token"])
-        if token_count is None and (input_tokens is not None or output_tokens is not None):
-            token_count = (input_tokens or 0) + (output_tokens or 0)
+        token_count = _token_count_from_model_row(item, input_tokens, output_tokens)
         grouped_item["token_count"] += token_count or 0
         grouped_item["input_tokens"] += input_tokens or 0
         grouped_item["output_tokens"] += output_tokens or 0
@@ -837,12 +832,10 @@ def _newapi_log_buckets(value: Any) -> list[dict[str, Any]]:
                 "amount": 0,
             },
         )
-        request_count = _coalesce_number(_number_from_keys(item, ["count", "request_count", "total_count"]), 1)
+        request_count = _request_count_from_model_row(item)
         input_tokens = _number_from_keys(item, ["input_tokens", "prompt_tokens"])
         output_tokens = _number_from_keys(item, ["output_tokens", "completion_tokens"])
-        token_count = _number_from_keys(item, ["token", "tokens", "token_count", "total_tokens", "total_token"])
-        if token_count is None and (input_tokens is not None or output_tokens is not None):
-            token_count = (input_tokens or 0) + (output_tokens or 0)
+        token_count = _token_count_from_model_row(item, input_tokens, output_tokens)
         bucket["request_count"] += request_count or 0
         bucket["token_count"] += token_count or 0
         bucket["input_tokens"] += input_tokens or 0
@@ -885,6 +878,26 @@ def _log_item_timestamp(item: dict[str, Any]) -> str | None:
         return None
     bucket = parsed.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     return bucket.isoformat()
+
+
+def _request_count_from_model_row(item: dict[str, Any]) -> float:
+    if _looks_like_log_row(item):
+        return 1
+    return _coalesce_number(_number_from_keys(item, ["count", "request_count", "total_count"]), 1) or 1
+
+
+def _token_count_from_model_row(
+    item: dict[str, Any],
+    input_tokens: float | None = None,
+    output_tokens: float | None = None,
+) -> float | None:
+    if input_tokens is not None or output_tokens is not None:
+        return (input_tokens or 0) + (output_tokens or 0)
+    return _number_from_keys(item, ["token", "tokens", "token_count", "total_tokens", "total_token"])
+
+
+def _looks_like_log_row(item: dict[str, Any]) -> bool:
+    return any(item.get(key) not in (None, "") for key in ("created_at", "created_time", "createdAt", "timestamp", "time"))
 
 
 def _parse_log_datetime(value: Any) -> datetime | None:

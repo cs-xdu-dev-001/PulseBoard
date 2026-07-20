@@ -310,6 +310,36 @@ def test_normalize_newapi_derives_usage_from_user_log_items():
     assert result.model_stats[0]["estimated_cost_usd"] == 0.041336
 
 
+def test_normalize_newapi_treats_log_rows_as_single_requests():
+    result = normalize_newapi(
+        LlmUsageConfig("academic-main", "Codex", "newapi_admin", base_url="https://example", access_token="secret"),
+        {
+            "logs": {
+                "success": True,
+                "data": {
+                    "items": [
+                        {
+                            "id": 197166031,
+                            "created_at": 1784447751,
+                            "model_name": "gpt-5.5",
+                            "count": 197166031,
+                            "token": 243_220_000_000,
+                            "prompt_tokens": 971,
+                            "completion_tokens": 912,
+                            "quota": 20668,
+                        },
+                    ]
+                },
+            }
+        },
+    )
+
+    assert result.request_count == 1
+    assert result.token_count == 1883
+    assert result.raw_summary["newapi"]["buckets"][0]["request_count"] == 1
+    assert result.raw_summary["newapi"]["buckets"][0]["token_count"] == 1883
+
+
 def test_normalize_newapi_builds_hourly_buckets_from_log_timestamps():
     result = normalize_newapi(
         LlmUsageConfig("academic-main", "Codex", "newapi_admin", base_url="https://example", access_token="secret"),
