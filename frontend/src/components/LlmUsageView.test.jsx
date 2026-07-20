@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as echarts from 'echarts'
 
 import {
@@ -35,11 +35,16 @@ vi.mock('../api.js', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useRealTimers()
   HTMLElement.prototype.scrollTo = vi.fn()
   fetchLlmSources.mockResolvedValue({ sources: [] })
   fetchLlmSummary.mockResolvedValue({})
   fetchLlmSeries.mockResolvedValue({ series: [], model_series: [] })
   fetchLlmModels.mockResolvedValue({ models: [] })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 it('LLM看板只保留监控操作，不再提供API Key配置', async () => {
@@ -104,6 +109,25 @@ it('月度活动独立拉取长周期数据，不受顶部今天范围限制', a
   await waitFor(() => expect(fetchLlmSeries).toHaveBeenCalledWith('today', ''))
   expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '')
   expect(screen.getByTitle(new RegExp(`${localDateKey(yesterday)}：31次请求，Token：3.10K`))).toBeVisible()
+})
+
+it('自动轮询不重复拉取月度活动长周期数据', async () => {
+  vi.useFakeTimers()
+  render(<LlmUsageView />)
+
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '')
+  fetchLlmSeries.mockClear()
+
+  await act(async () => {
+    vi.advanceTimersByTime(30000)
+    await Promise.resolve()
+  })
+
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '')
+  expect(fetchLlmSeries).not.toHaveBeenCalledWith('29d', '')
 })
 
 it('同一供应商多个Key返回相同余额时只计一次账户余额', async () => {

@@ -400,7 +400,7 @@ def llm_usage_series(
                 if latest_bucket_snapshot_ids.get((source_row.id, _newapi_bucket_date_key(bucket))) == row.id
             ]
             if filtered_buckets:
-                _append_newapi_bucket_series(series_by_source, series_by_model, row, source_row, filtered_buckets)
+                _append_newapi_bucket_series(series_by_source, series_by_model, row, source_row, filtered_buckets, range)
             continue
         item = series_by_source.setdefault(
             source_row.id,
@@ -1006,12 +1006,26 @@ def _newapi_bucket_date_key(bucket: dict) -> str:
     return parsed.astimezone().date().isoformat()
 
 
+def _newapi_series_timestamp(timestamp: str, range_value: str) -> str:
+    if range_value in ("today", "24h"):
+        return timestamp
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp[:10]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local_day = parsed.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_day.isoformat()
+
+
 def _append_newapi_bucket_series(
     series_by_source: dict[int, dict],
     series_by_model: dict[str, dict],
     snapshot: LlmUsageSnapshot,
     source_row: LlmUsageSource,
     buckets: list[dict],
+    range_value: str,
 ) -> None:
     item = series_by_source.setdefault(
         source_row.id,
@@ -1023,6 +1037,7 @@ def _append_newapi_bucket_series(
         },
     )
     source_totals: dict[str, dict] = {}
+    model_totals: dict[tuple[str, str, str], dict] = {}
     for bucket in buckets:
         if not isinstance(bucket, dict):
             continue
@@ -1031,10 +1046,11 @@ def _append_newapi_bucket_series(
         timestamp = bucket.get("timestamp")
         if not timestamp:
             continue
+        series_timestamp = _newapi_series_timestamp(str(timestamp), range_value)
         source_total = source_totals.setdefault(
-            str(timestamp),
+            series_timestamp,
             {
-                "timestamp": str(timestamp),
+                "timestamp": series_timestamp,
                 "request_count": 0,
                 "token_count": None,
                 "quota_used": 0,
@@ -1055,17 +1071,21 @@ def _append_newapi_bucket_series(
         source_total["estimated_cost_usd"] += estimated_cost
 
         model = bucket.get("model") or "unknown"
-        model_series = series_by_model.setdefault(str(model), {"model": str(model), "display_name": str(model), "points": []})
-        model_series["points"].append(
+        model_key = (str(model), source_row.source_id, series_timestamp)
+        model_total = model_totals.setdefault(
+            model_key,
             {
-                "timestamp": str(timestamp),
+                "timestamp": series_timestamp,
                 "source_id": source_row.source_id,
-                "request_count": bucket.get("request_count") or 0,
-                "amount": amount,
-                "estimated_cost_usd": estimated_cost,
+                "request_count": 0,
+                "amount": 0,
+                "estimated_cost_usd": 0,
                 "pricing_basis": bucket.get("pricing_basis") or "newapi_quota",
-            }
+            },
         )
+        model_total["request_count"] += bucket.get("request_count") or 0
+        model_total["amount"] += amount
+        model_total["estimated_cost_usd"] += estimated_cost
     item["points"].extend(
         {
             **point,
@@ -1075,6 +1095,15 @@ def _append_newapi_bucket_series(
         }
         for _timestamp, point in sorted(source_totals.items())
     )
+    for (model, _source_id, _timestamp), point in sorted(model_totals.items()):
+        model_series = series_by_model.setdefault(model, {"model": model, "display_name": model, "points": []})
+        model_series["points"].append(
+            {
+                **point,
+                "amount": round(point["amount"], 6),
+                "estimated_cost_usd": round(point["estimated_cost_usd"], 6),
+            }
+        )
 
 
 def _llm_usage_capability(source_rows: list[LlmUsageSource]) -> dict:

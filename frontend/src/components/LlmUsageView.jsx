@@ -27,31 +27,60 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
 
-  async function load(nextSource = source) {
+  async function loadMain(nextSource = source, shouldCommit = () => true) {
     try {
-      const [nextSources, nextSummary, nextSeries, nextModels, nextActivitySeries] = await Promise.all([
+      const [nextSources, nextSummary, nextSeries, nextModels] = await Promise.all([
         fetchLlmSources(),
         fetchLlmSummary(range, nextSource),
         fetchLlmSeries(range, nextSource),
         fetchLlmModels(range, nextSource),
-        fetchLlmSeries(activityRange, nextSource),
       ])
+      if (!shouldCommit()) return
       setSources(nextSources.sources || [])
       setSummary(nextSummary)
       setSeries(nextSeries)
-      setActivitySeries(nextActivitySeries)
       setModels(nextModels.models || [])
       setError(null)
     } catch (err) {
-      setError(err.message)
+      if (shouldCommit()) setError(err.message)
+    }
+  }
+
+  async function loadActivity(nextSource = source, shouldCommit = () => true) {
+    try {
+      const nextActivitySeries = await fetchLlmSeries(activityRange, nextSource)
+      if (!shouldCommit()) return
+      setActivitySeries(nextActivitySeries)
+      setError(null)
+    } catch (err) {
+      if (shouldCommit()) setError(err.message)
     }
   }
 
   useEffect(() => {
-    load()
-    const timer = setInterval(() => load(), 30000)
-    return () => clearInterval(timer)
+    let active = true
+    let inFlight = false
+    const run = async () => {
+      if (inFlight) return
+      inFlight = true
+      await loadMain(source, () => active)
+      inFlight = false
+    }
+    run()
+    const timer = setInterval(run, 30000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
   }, [range, source])
+
+  useEffect(() => {
+    let active = true
+    loadActivity(source, () => active)
+    return () => {
+      active = false
+    }
+  }, [source])
 
   useEffect(() => {
     if (range !== 'today' && granularity === 'hour') setGranularity('day')
@@ -61,7 +90,7 @@ export function LlmUsageView({ theme = 'dark' }) {
     setRefreshing(true)
     try {
       await refreshLlmUsage()
-      await load()
+      await Promise.all([loadMain(source), loadActivity(source)])
     } catch (err) {
       setError(err.message)
     } finally {

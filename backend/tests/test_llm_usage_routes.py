@@ -778,6 +778,60 @@ def test_llm_usage_series_uses_newapi_log_buckets_instead_of_snapshot_time(monke
     assert payload["model_series"][0]["points"][0]["request_count"] == 3
 
 
+def test_llm_usage_series_aggregates_newapi_buckets_by_day_for_long_ranges(monkeypatch):
+    mock_academic_config(monkeypatch)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    bucket_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                request_count=0,
+                token_count=0,
+                quota_used=0,
+                estimated_amount=0,
+                raw_summary={
+                    "newapi": {
+                        "buckets": [
+                            {
+                                "timestamp": (bucket_day + timedelta(minutes=index)).isoformat(),
+                                "model": "gpt-4.1-mini",
+                                "request_count": 1,
+                                "input_tokens": 2,
+                                "output_tokens": 3,
+                                "amount": 10,
+                                "estimated_cost_usd": 0.00002,
+                                "pricing_basis": "newapi_quota",
+                            }
+                            for index in range(360)
+                        ]
+                    }
+                },
+            )
+        )
+        db.commit()
+
+    payload = client.get("/api/llm/usage/series?range=29d").json()
+
+    assert len(payload["series"][0]["points"]) == 1
+    assert payload["series"][0]["points"][0]["request_count"] == 360
+    assert payload["series"][0]["points"][0]["token_count"] == 1800
+    assert payload["series"][0]["points"][0]["estimated_cost_usd"] == 0.0072
+    assert len(payload["model_series"][0]["points"]) == 1
+    assert payload["model_series"][0]["points"][0]["request_count"] == 360
+
+
 def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatch):
     monkeypatch.setattr(
         routes,
@@ -839,7 +893,10 @@ def test_llm_usage_series_keeps_latest_newapi_bucket_snapshot_per_day(monkeypatc
     payload = client.get("/api/llm/usage/series?range=7d").json()
     points = payload["series"][0]["points"]
 
-    assert [point["timestamp"] for point in points] == [yesterday.isoformat(), today.isoformat()]
+    assert [datetime.fromisoformat(point["timestamp"]).date().isoformat() for point in points] == [
+        yesterday.astimezone().date().isoformat(),
+        today.astimezone().date().isoformat(),
+    ]
     assert [point["request_count"] for point in points] == [7, 3]
 
 
