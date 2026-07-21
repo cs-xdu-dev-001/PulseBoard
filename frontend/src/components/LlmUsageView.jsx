@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
-import { fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refreshLlmUsage } from '../api.js'
+import { fetchLlmActivity, fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refreshLlmUsage } from '../api.js'
 
 const ranges = [
   { value: 'today', label: '今天' },
@@ -9,7 +9,6 @@ const ranges = [
   { value: '29d', label: '29天' },
 ]
 
-const activityRange = '29d'
 const modelColors = ['#22c55e', '#f97316', '#38bdf8', '#2563eb', '#8b5cf6', '#f43f5e', '#14b8a6', '#eab308']
 
 export function LlmUsageView({ theme = 'dark' }) {
@@ -18,7 +17,7 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [sources, setSources] = useState([])
   const [summary, setSummary] = useState(null)
   const [series, setSeries] = useState(null)
-  const [activitySeries, setActivitySeries] = useState(null)
+  const [activity, setActivity] = useState(null)
   const [models, setModels] = useState([])
   const [expandedProviders, setExpandedProviders] = useState({})
   const [costChartMode, setCostChartMode] = useState('bar')
@@ -26,17 +25,17 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [granularity, setGranularity] = useState('day')
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const activityCacheRef = useRef(new Map())
+  const activityYear = new Date().getFullYear()
 
   async function loadMain(nextSource = source, shouldCommit = () => true) {
     try {
-      const [nextSources, nextSummary, nextSeries, nextModels] = await Promise.all([
-        fetchLlmSources(),
+      const [nextSummary, nextSeries, nextModels] = await Promise.all([
         fetchLlmSummary(range, nextSource),
         fetchLlmSeries(range, nextSource),
         fetchLlmModels(range, nextSource),
       ])
       if (!shouldCommit()) return
-      setSources(nextSources.sources || [])
       setSummary(nextSummary)
       setSeries(nextSeries)
       setModels(nextModels.models || [])
@@ -46,16 +45,41 @@ export function LlmUsageView({ theme = 'dark' }) {
     }
   }
 
-  async function loadActivity(nextSource = source, shouldCommit = () => true) {
+  async function loadSources(shouldCommit = () => true) {
     try {
-      const nextActivitySeries = await fetchLlmSeries(activityRange, nextSource)
+      const nextSources = await fetchLlmSources()
       if (!shouldCommit()) return
-      setActivitySeries(nextActivitySeries)
+      setSources(nextSources.sources || [])
+    } catch (err) {
+      if (shouldCommit()) setError(err.message)
+    }
+  }
+
+  async function loadActivity(nextSource = source, shouldCommit = () => true) {
+    const cacheKey = `${activityYear}:${nextSource}`
+    const cached = activityCacheRef.current.get(cacheKey)
+    if (cached) {
+      setActivity(cached)
+      return
+    }
+    try {
+      const nextActivity = await fetchLlmActivity(activityYear, nextSource)
+      if (!shouldCommit()) return
+      activityCacheRef.current.set(cacheKey, nextActivity)
+      setActivity(nextActivity)
       setError(null)
     } catch (err) {
       if (shouldCommit()) setError(err.message)
     }
   }
+
+  useEffect(() => {
+    let active = true
+    loadSources(() => active)
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -90,7 +114,8 @@ export function LlmUsageView({ theme = 'dark' }) {
     setRefreshing(true)
     try {
       await refreshLlmUsage()
-      await Promise.all([loadMain(source), loadActivity(source)])
+      activityCacheRef.current.delete(`${activityYear}:${source}`)
+      await Promise.all([loadSources(), loadMain(source), loadActivity(source)])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -107,8 +132,8 @@ export function LlmUsageView({ theme = 'dark' }) {
   const tokenUsageMessage = summary?.token_usage_message || series?.token_usage_message || ''
   const usageSeries = useMemo(() => filterUsageSeries(series?.series || []), [series])
   const usageModelSeries = useMemo(() => filterUsageSeries(series?.model_series || []), [series])
-  const activityUsageSeries = useMemo(() => filterUsageSeries(activitySeries?.series || []), [activitySeries])
-  const activityTokenIncomplete = tokenIncomplete || activitySeries?.token_usage_complete === false
+  const activityDaysData = useMemo(() => activityDays(activity), [activity])
+  const activityTokenIncomplete = tokenIncomplete || (activity?.token_complete === false && (activity?.active_days || 0) > 0)
   const topModel = usageUnavailable ? '--' : (models[0]?.model || '--')
   const costSummary = useMemo(
     () => usageUnavailable ? null : costSummaryFromModels(models, summary?.estimated_cost_usd),
@@ -199,7 +224,7 @@ export function LlmUsageView({ theme = 'dark' }) {
       />
 
       <div className="llm-insight-grid">
-        <ActivityHeatmap series={activityUsageSeries} usageUnavailable={usageUnavailable} tokenIncomplete={activityTokenIncomplete} />
+        <ActivityHeatmap days={activityDaysData} usageUnavailable={usageUnavailable} tokenIncomplete={activityTokenIncomplete} />
         <RankPanel title="Key调用排行" items={usageUnavailable ? [] : sourceRankItems(usageSeries)} metricLabel="请求" emptyLabel={usageUnavailable ? '用量不可用' : '暂无排行数据'} />
       </div>
 
@@ -263,10 +288,12 @@ function UsageDistribution({ mode, onModeChange, total, series, range, granulari
   )
 }
 
-function ActivityHeatmap({ series, usageUnavailable, tokenIncomplete }) {
-  const days = useMemo(() => activityDays(series), [series])
+function ActivityHeatmap({ days, usageUnavailable, tokenIncomplete }) {
   const scrollRef = useRef(null)
-  const max = Math.max(...days.map((day) => day.value), 0)
+  const thresholds = useMemo(
+    () => quantileThresholds(days.filter((day) => day.tokenAvailable).map((day) => day.value)),
+    [days],
+  )
   const weekCount = Math.ceil(days.length / 7)
 
   useEffect(() => {
@@ -277,7 +304,7 @@ function ActivityHeatmap({ series, usageUnavailable, tokenIncomplete }) {
 
   return (
     <section className="llm-panel activity-panel">
-      <PanelHeader title="月度活动" accent="blue" total={`活跃${days.filter((day) => day.value > 0).length}天`} />
+      <PanelHeader title="Token活动" accent="blue" total={`活跃${days.filter((day) => day.hasData && (day.value > 0 || day.requests > 0)).length}天`} />
       {usageUnavailable && <div className="empty-panel inline-empty">官方未提供用量统计</div>}
       <div className="activity-scroll" ref={scrollRef} aria-label="月度活动，横向滚动">
         <div className="activity-canvas" style={{ '--activity-weeks': weekCount }}>
@@ -285,9 +312,9 @@ function ActivityHeatmap({ series, usageUnavailable, tokenIncomplete }) {
             {days.map((day, index) => (
               <span
                 key={day.key}
-                className={`activity-cell level-${activityLevel(day.value, max)} row-${index % 7} ${day.isToday ? 'today' : ''}`}
-                data-tooltip={`${day.key}：${formatNumber(day.value)}次请求，${tokenIncomplete ? '采样Token' : 'Token'}：${formatCompact(day.tokens)}`}
-                title={`${day.key}：${formatNumber(day.value)}次请求，${tokenIncomplete ? '采样Token' : 'Token'}：${formatCompact(day.tokens)}`}
+                className={`activity-cell level-${activityLevel(day.value, thresholds)} row-${index % 7} ${day.isToday ? 'today' : ''}`}
+                data-tooltip={`${day.key}：Token：${day.tokenAvailable ? formatCompact(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
+                title={`${day.key}：Token：${day.tokenAvailable ? formatCompact(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
               />
             ))}
           </div>
@@ -434,7 +461,7 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectProvide
                 <small>{item.source_id}</small>
               </span>
               <span className={`llm-status ${item.status}`}>{statusText(item.status)}</span>
-              <span>{formatKeyBalance(item)}</span>
+              {!item.source_type?.startsWith('deepseek_') && <span>{formatKeyBalance(item)}</span>}
               <small>{formatTime(item.last_checked_at)}</small>
             </button>
           ))}
@@ -772,17 +799,26 @@ function localHourLabel(date) {
   return `${String(date.getHours()).padStart(2, '0')}:00`
 }
 
-function activityDays(series) {
+function activityDays(activity) {
   const today = startOfLocalDay(new Date())
   const todayKey = localDateKey(today)
   const start = new Date(today.getFullYear(), 0, 1)
   const end = new Date(today.getFullYear(), 11, 31)
-  const values = dailySourceTotals(series)
+  const values = new Map((activity?.days || []).map((day) => [day.date, day]))
   const days = []
   for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
     const key = localDateKey(cursor)
-    const value = values.get(key) || { requests: 0, tokens: 0 }
-    days.push({ key, value: value.requests, tokens: value.tokens, isToday: key === todayKey })
+    const value = values.get(key)
+    days.push({
+      key,
+      value: value?.token_count ?? null,
+      tokens: value?.token_count ?? null,
+      requests: value?.request_count || 0,
+      hasData: value?.has_data === true,
+      tokenAvailable: value?.token_count != null,
+      dataQuality: value?.data_quality || 'unavailable',
+      isToday: key === todayKey,
+    })
   }
   return days
 }
@@ -792,23 +828,6 @@ function activityTodayScrollLeft(days) {
   if (todayIndex < 0) return 0
   const weekIndex = Math.floor(todayIndex / 7)
   return Math.max(0, weekIndex * 32 - 180)
-}
-
-function dailySourceTotals(series) {
-  const totals = new Map()
-  for (const item of series || []) {
-    for (const point of item.points || []) {
-      const date = new Date(point.timestamp)
-      if (Number.isNaN(date.getTime())) continue
-      const key = localDateKey(date)
-      const current = totals.get(key) || { requests: 0, tokens: 0 }
-      totals.set(key, {
-        requests: current.requests + (Number(point.request_count) || 0),
-        tokens: current.tokens + (Number(point.token_count) || 0),
-      })
-    }
-  }
-  return totals
 }
 
 function activityMonthLabels(days) {
@@ -824,13 +843,19 @@ function activityMonthLabels(days) {
   return labels
 }
 
-function activityLevel(value, max) {
-  if (!value || !max) return 0
-  const ratio = value / max
-  if (ratio > 0.75) return 4
-  if (ratio > 0.45) return 3
-  if (ratio > 0.18) return 2
+function activityLevel(value, thresholds) {
+  if (value == null || !thresholds.length) return 0
+  if (value >= thresholds[2]) return 4
+  if (value >= thresholds[1]) return 3
+  if (value >= thresholds[0]) return 2
   return 1
+}
+
+function quantileThresholds(values) {
+  const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)
+  if (!sorted.length) return []
+  const at = (ratio) => sorted[Math.floor((sorted.length - 1) * ratio)]
+  return [at(0.25), at(0.5), at(0.75)]
 }
 
 function sourceRankItems(series) {

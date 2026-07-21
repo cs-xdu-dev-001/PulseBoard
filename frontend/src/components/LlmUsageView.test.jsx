@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as echarts from 'echarts'
 
 import {
+  fetchLlmActivity,
   fetchLlmModels,
   fetchLlmSeries,
   fetchLlmSources,
@@ -26,6 +27,7 @@ vi.mock('echarts', () => ({
 }))
 
 vi.mock('../api.js', () => ({
+  fetchLlmActivity: vi.fn(),
   fetchLlmModels: vi.fn(),
   fetchLlmSeries: vi.fn(),
   fetchLlmSources: vi.fn(),
@@ -38,6 +40,7 @@ beforeEach(() => {
   vi.useRealTimers()
   HTMLElement.prototype.scrollTo = vi.fn()
   fetchLlmSources.mockResolvedValue({ sources: [] })
+  fetchLlmActivity.mockResolvedValue({ days: [], active_days: 0, token_complete: true })
   fetchLlmSummary.mockResolvedValue({})
   fetchLlmSeries.mockResolvedValue({ series: [], model_series: [] })
   fetchLlmModels.mockResolvedValue({ models: [] })
@@ -70,55 +73,37 @@ it('LLM看板支持New API风格范围切换并请求对应数据', async () => 
   expect(fetchLlmModels).toHaveBeenLastCalledWith('29d', '')
 })
 
-it('月度活动独立拉取长周期数据，不受顶部今天范围限制', async () => {
+it('月度活动独立拉取全年每日数据，不受顶部今天范围限制', async () => {
   const today = new Date()
   today.setHours(10, 0, 0, 0)
   const yesterday = new Date(today)
   yesterday.setDate(today.getDate() - 1)
 
-  fetchLlmSeries.mockImplementation(async (range) => {
-    if (range === '29d') {
-      return {
-        series: [
-          {
-            source_id: 'academic-main',
-            display_name: '主Key',
-            points: [
-              { timestamp: yesterday.toISOString(), request_count: 31, token_count: 3100 },
-              { timestamp: today.toISOString(), request_count: 12, token_count: 1200 },
-            ],
-          },
-        ],
-        model_series: [],
-      }
-    }
-    return {
-      series: [
-        {
-          source_id: 'academic-main',
-          display_name: '主Key',
-          points: [{ timestamp: today.toISOString(), request_count: 12, token_count: 1200 }],
-        },
-      ],
-      model_series: [],
-    }
+  fetchLlmActivity.mockResolvedValue({
+    days: [
+      { date: localDateKey(yesterday), request_count: 31, token_count: 3100, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: localDateKey(today), request_count: 12, token_count: 1200, has_data: true, token_complete: true, data_quality: 'complete' },
+    ],
+    active_days: 2,
+    token_complete: true,
   })
 
   render(<LlmUsageView />)
 
-  await waitFor(() => expect(fetchLlmSeries).toHaveBeenCalledWith('today', ''))
-  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '')
-  expect(screen.getByTitle(new RegExp(`${localDateKey(yesterday)}：31次请求，Token：3.10K`))).toBeVisible()
+  await waitFor(() => expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), ''))
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '')
+  expect(screen.getByTitle(new RegExp(`${localDateKey(yesterday)}：Token：3.10K，31次请求`))).toBeVisible()
 })
 
-it('自动轮询不重复拉取月度活动长周期数据', async () => {
+it('自动轮询不重复拉取全年活动数据', async () => {
   vi.useFakeTimers()
   render(<LlmUsageView />)
 
   await act(async () => {
     await Promise.resolve()
   })
-  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '')
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), '')
+  fetchLlmActivity.mockClear()
   fetchLlmSeries.mockClear()
 
   await act(async () => {
@@ -127,7 +112,7 @@ it('自动轮询不重复拉取月度活动长周期数据', async () => {
   })
 
   expect(fetchLlmSeries).toHaveBeenCalledWith('today', '')
-  expect(fetchLlmSeries).not.toHaveBeenCalledWith('29d', '')
+  expect(fetchLlmActivity).not.toHaveBeenCalled()
 })
 
 it('同一供应商多个Key返回相同余额时只计一次账户余额', async () => {
@@ -283,6 +268,15 @@ it('部分统计视图中过滤仅余额来源的用量序列', async () => {
       },
     ],
   })
+  fetchLlmActivity.mockResolvedValue({
+    days: [
+      { date: '2026-01-01', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: '2026-07-21', request_count: 200, token_count: 13_345_678, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: '2026-12-31', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
+    ],
+    active_days: 3,
+    token_complete: true,
+  })
   fetchLlmSummary.mockResolvedValue({
     usage_supported: true,
     usage_scope: 'partial',
@@ -311,6 +305,11 @@ it('部分统计视图中过滤仅余额来源的用量序列', async () => {
     ],
     model_series: [],
   })
+  fetchLlmActivity.mockResolvedValue({
+    days: [{ date: localDateKey(new Date()), request_count: 12, token_count: 3000, has_data: true, token_complete: true, data_quality: 'complete' }],
+    active_days: 1,
+    token_complete: true,
+  })
 
   render(<LlmUsageView />)
 
@@ -318,7 +317,7 @@ it('部分统计视图中过滤仅余额来源的用量序列', async () => {
   const rankPanel = screen.getByText('Key调用排行').closest('.rank-panel')
   expect(within(rankPanel).getByText('中转Key')).toBeVisible()
   expect(within(rankPanel).queryByText('DeepSeek主Key')).not.toBeInTheDocument()
-  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：12次请求，Token：3.00K`))).toBeVisible()
+  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：Token：3.00K，12次请求`))).toBeVisible()
   expect(screen.queryByTitle(new RegExp(`${localDateKey(new Date())}：111次请求`))).not.toBeInTheDocument()
 })
 
@@ -353,13 +352,18 @@ it('New API日志不完整时把Token标记为采样值', async () => {
     ],
     model_series: [],
   })
+  fetchLlmActivity.mockResolvedValue({
+    days: [{ date: localDateKey(today), request_count: 20000, token_count: 2_000_000, has_data: true, token_complete: false, data_quality: 'sampled' }],
+    active_days: 1,
+    token_complete: false,
+  })
 
   render(<LlmUsageView />)
 
   expect(await screen.findByText('Token采样')).toBeVisible()
   expect(screen.getByText('NewAPI日志超过当前采集上限，Token为采样值，官方消耗金额仍以额度统计为准')).toBeVisible()
   expect(screen.queryByText('总Token')).not.toBeInTheDocument()
-  expect(screen.getByTitle(new RegExp(`${localDateKey(today)}：20,000次请求，采样Token：2.00M`))).toBeVisible()
+  expect(screen.getByTitle(new RegExp(`${localDateKey(today)}：Token：2.00M，20,000次请求，采样`))).toBeVisible()
 })
 
 it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
@@ -395,13 +399,13 @@ it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
   fireEvent.change(filter, { target: { value: 'provider:academic' } })
   await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'provider:academic'))
   expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'provider:academic')
-  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', 'provider:academic')
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'provider:academic')
   expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'provider:academic')
 
   fireEvent.change(filter, { target: { value: 'source:academic-main' } })
   await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'source:academic-main'))
   expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'source:academic-main')
-  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', 'source:academic-main')
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'source:academic-main')
   expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'source:academic-main')
 })
 
@@ -452,24 +456,33 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
       { model: 'gpt-5.6-sol', request_count: 260, amount: 260, estimated_cost_usd: 1.8, pricing_basis: 'newapi_quota' },
     ],
   })
+  fetchLlmActivity.mockResolvedValue({
+    days: [
+      { date: '2026-01-01', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: '2026-07-21', request_count: 200, token_count: 13_345_678, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: '2026-12-31', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
+    ],
+    active_days: 3,
+    token_complete: true,
+  })
 
   render(<LlmUsageView />)
 
   expect(await screen.findByText('性能健康')).toBeVisible()
-  expect(screen.getByText('月度活动')).toBeVisible()
+  expect(screen.getByText('Token活动')).toBeVisible()
   expect(screen.getByText('模型调用分析')).toBeVisible()
   expect(screen.getByText('成功率')).toBeVisible()
   expect(screen.getByText((_content, element) => element?.textContent === '1,200次')).toBeVisible()
-  expect(screen.getByTitle(/200次请求，Token：13.35M/)).toBeVisible()
+  expect(screen.getByTitle(/Token：13.35M，200次请求/)).toBeVisible()
   expect(screen.queryByText('82.19%')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: '调用趋势' })).toBeVisible()
   expect(screen.getByRole('button', { name: '调用次数分布' })).toBeVisible()
   expect(screen.getByRole('button', { name: '调用次数排行' })).toBeVisible()
-  expect(screen.getByTitle(/2026-01-01：0次请求，Token：0.00/)).toBeVisible()
-  expect(screen.getByTitle(/2026-12-31：0次请求，Token：0.00/)).toBeVisible()
-  expect(screen.getByTitle(/2026-01-01：0次请求，Token：0.00/)).toHaveClass('row-0')
-  expect(screen.getByTitle(/2026-01-02：0次请求，Token：0.00/)).toHaveClass('row-1')
-  expect(screen.getByTitle(new RegExp(`${localDateKey(new Date())}：200次请求，Token：13.35M`))).toHaveClass('today')
+  expect(screen.getByTitle(/2026-01-01：Token：0.00，0次请求/)).toBeVisible()
+  expect(screen.getByTitle(/2026-12-31：Token：0.00，0次请求/)).toBeVisible()
+  expect(screen.getByTitle(/2026-01-01：Token：0.00，0次请求/)).toHaveClass('row-0')
+  expect(screen.getByTitle(/2026-01-02：Token：不可用，0次请求/)).toHaveClass('row-1')
+  expect(screen.getByTitle(/2026-07-21：Token：13.35M，200次请求/)).toHaveClass('today')
   expect(screen.getByLabelText('月度活动，横向滚动').scrollTo).toHaveBeenCalledWith({ left: expect.any(Number), behavior: 'auto' })
 })
 

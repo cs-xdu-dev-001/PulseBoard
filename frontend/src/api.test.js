@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteLlmConfig, deleteLlmProvider, refreshLlmUsage, saveLlmConfig, saveSettings, testLlmConfig, updateLlmProvider } from './api.js'
+import { deleteLlmConfig, deleteLlmProvider, fetchLlmActivity, refreshLlmUsage, saveLlmConfig, saveSettings, testLlmConfig, updateLlmProvider } from './api.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -31,6 +31,18 @@ describe('API错误详情', () => {
     )))
 
     await expect(refreshLlmUsage()).rejects.toThrow('collector failed')
+  })
+
+  it('活动接口按年份和来源筛选', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ days: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchLlmActivity(2026, 'provider:academic')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/llm/usage/activity?year=2026&source=provider%3Aacademic')
   })
 
   it('删除Key失败时复用FastAPI detail', async () => {

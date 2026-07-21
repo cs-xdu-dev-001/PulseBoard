@@ -113,6 +113,12 @@ export function fetchLlmModels(range, source = '') {
   return getJson(`/api/llm/usage/models?${params}`)
 }
 
+export function fetchLlmActivity(year, source = '') {
+  const params = new URLSearchParams({ year: String(year) })
+  if (source) params.set('source', source)
+  return getJson(`/api/llm/usage/activity?${params}`)
+}
+
 export async function refreshLlmUsage() {
   const response = await fetch(`${API_BASE}/api/llm/usage/refresh`, { method: 'POST' })
   if (!response.ok) {
