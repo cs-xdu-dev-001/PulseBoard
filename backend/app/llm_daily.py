@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from threading import RLock
 from typing import Any
@@ -363,16 +362,25 @@ def _gateway_values(
 ) -> list[dict[str, Any]]:
     usage_date = _local_date(collected_at, _zone(lab_timezone))
     values = []
-    total_tokens = token_count
-    total_requests = request_count
-    total_amount = estimated_amount
+    model_tokens = 0.0
+    model_requests = 0.0
+    model_amount = 0.0
+    has_model_tokens = False
+    has_model_requests = False
+    has_model_amount = False
     for item in model_stats:
         item_tokens = _number(item.get("token_count"))
         item_requests = _number(item.get("request_count"))
         item_amount = _number(item.get("estimated_cost_usd"))
-        total_tokens = (total_tokens or 0) + (item_tokens or 0) if total_tokens is not None else item_tokens
-        total_requests = (total_requests or 0) + (item_requests or 0) if total_requests is not None else item_requests
-        total_amount = (total_amount or 0) + (item_amount or 0) if total_amount is not None else item_amount
+        if item_tokens is not None:
+            model_tokens += item_tokens
+            has_model_tokens = True
+        if item_requests is not None:
+            model_requests += item_requests
+            has_model_requests = True
+        if item_amount is not None:
+            model_amount += item_amount
+            has_model_amount = True
         values.append(
             _value(
                 source_id=source_id,
@@ -390,6 +398,9 @@ def _gateway_values(
                 observed_at=collected_at,
             )
         )
+    total_tokens = token_count if token_count is not None else model_tokens if has_model_tokens else None
+    total_requests = request_count if request_count is not None else model_requests if has_model_requests else None
+    total_amount = estimated_amount if estimated_amount is not None else model_amount if has_model_amount else None
     values.insert(
         0,
         _value(

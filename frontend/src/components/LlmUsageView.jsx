@@ -1007,6 +1007,10 @@ function costSummaryFromModels(models, fallbackUsd) {
     const currency = currencyForPricingBasis(item.pricing_basis)
     totals.set(currency, (totals.get(currency) || 0) + value)
   }
+  if (totals.size === 1 && totals.has('USD') && fallbackUsd != null) {
+    const official = Number(fallbackUsd)
+    if (Number.isFinite(official)) totals.set('USD', official)
+  }
   if (!totals.size && fallbackUsd != null) {
     const value = Number(fallbackUsd)
     if (Number.isFinite(value)) totals.set('USD', value)

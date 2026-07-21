@@ -562,6 +562,64 @@ def test_llm_usage_summary_prefers_newapi_official_quota_amount(monkeypatch):
     assert series["series"][0]["points"][0]["estimated_cost_usd"] == 11.08799
 
 
+def test_llm_usage_summary_prefers_newapi_period_stat_over_sampled_logs(monkeypatch):
+    mock_academic_config(monkeypatch)
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=now,
+                range_key="latest",
+                request_count=100,
+                token_count=10_000,
+                quota_used=1_873_150,
+                estimated_amount=3.7463,
+                model_stats=[
+                    {
+                        "model": "gpt-5.6-sol",
+                        "request_count": 1,
+                        "input_tokens": 100,
+                        "output_tokens": 100,
+                        "amount": 2_170_000,
+                    }
+                ],
+                raw_summary={
+                    "stat": {"count": 100, "token": 10_000, "quota": 1_873_150},
+                    "newapi": {
+                        "buckets": [
+                            {
+                                "timestamp": now.isoformat(),
+                                "model": "gpt-5.6-sol",
+                                "request_count": 1,
+                                "input_tokens": 100,
+                                "output_tokens": 100,
+                                "amount": 2_170_000,
+                                "estimated_cost_usd": 4.34,
+                            }
+                        ]
+                    },
+                },
+            )
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=today&source=provider:academic").json()
+
+    assert summary["request_count"] == 100
+    assert summary["token_count"] == 10_000
+    assert summary["estimated_cost_usd"] == 3.7463
+
+
 def test_llm_usage_summary_marks_deepseek_balance_as_usage_unavailable(monkeypatch):
     monkeypatch.setattr(
         routes,

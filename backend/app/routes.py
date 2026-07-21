@@ -1069,6 +1069,8 @@ def _llm_source_payload(source: LlmUsageSource | None, config: dict | None = Non
 def _snapshot_cost(snapshot: LlmUsageSnapshot) -> float | None:
     if (snapshot.raw_summary or {}).get("deepseek_platform"):
         return snapshot.estimated_amount
+    if _newapi_stat_number(snapshot, ["quota", "used_quota", "quota_used", "amount"]) is not None:
+        return snapshot.estimated_amount
     model_cost = estimate_snapshot_cost_usd(
         model_stats=snapshot.model_stats or [],
         token_count=snapshot.token_count,
@@ -1107,9 +1109,19 @@ def _newapi_snapshot_buckets(snapshot: LlmUsageSnapshot) -> list[dict]:
     return buckets if isinstance(buckets, list) else []
 
 
+def _newapi_stat_number(snapshot: LlmUsageSnapshot, keys: list[str]) -> float | None:
+    stat = (snapshot.raw_summary or {}).get("stat")
+    if isinstance(stat, dict) and isinstance(stat.get("data"), dict):
+        stat = stat["data"]
+    return _number_from_any(stat, keys) if isinstance(stat, dict) else None
+
+
 def _snapshot_token_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource) -> float:
     if source_row.source_type != "newapi_admin":
         return snapshot.token_count or 0
+    official = _newapi_stat_number(snapshot, ["token", "tokens", "token_count", "total_tokens"])
+    if official is not None:
+        return official
     buckets = _newapi_snapshot_buckets(snapshot)
     if not buckets:
         return snapshot.token_count or 0
@@ -1127,6 +1139,9 @@ def _snapshot_token_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource
 def _snapshot_request_count(snapshot: LlmUsageSnapshot, source_row: LlmUsageSource) -> float:
     if source_row.source_type != "newapi_admin":
         return snapshot.request_count or 0
+    official = _newapi_stat_number(snapshot, ["count", "request_count", "total_count"])
+    if official is not None:
+        return official
     buckets = _newapi_snapshot_buckets(snapshot)
     if not buckets:
         return snapshot.request_count or 0

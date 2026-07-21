@@ -521,6 +521,25 @@ it('全部来源混合DeepSeek和NewAPI时不把CNY消耗显示成美元', async
   expect(screen.getByText('CNY 313.92')).toBeVisible()
 })
 
+it('NewAPI总消耗优先使用官方周期金额而不是日志模型样本之和', async () => {
+  fetchLlmSummary.mockResolvedValue({
+    estimated_cost_usd: 3.7463,
+    request_count: 100,
+    token_count: 10_000,
+  })
+  fetchLlmModels.mockResolvedValue({
+    models: [
+      { model: 'gpt-5.6-sol', estimated_cost_usd: 3.2147, pricing_basis: 'newapi_quota' },
+      { model: 'gpt-5.5', estimated_cost_usd: 1.1253, pricing_basis: 'newapi_quota' },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  await waitFor(() => expect(screen.getAllByText('USD 3.75').length).toBeGreaterThan(0))
+  expect(screen.queryByText('USD 4.34')).not.toBeInTheDocument()
+})
+
 function localDateKey(date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')

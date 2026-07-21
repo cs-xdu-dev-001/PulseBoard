@@ -7,7 +7,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.llm_daily import rebuild_daily_rollups
+from app.llm_daily import rebuild_daily_rollups, upsert_daily_from_result
+from app.llm_usage import LlmUsageResult
 from app.models import LlmUsageDaily, LlmUsageSnapshot, LlmUsageSource
 
 
@@ -151,3 +152,43 @@ def test_rebuild_daily_rollups_reads_deepseek_daily_buckets():
     assert {row.usage_date.isoformat() for row in rows} == {"2026-07-20", "2026-07-21"}
     assert sum(row.token_count for row in rows) == 1_500
     assert all(row.currency == "CNY" for row in rows)
+
+
+def test_gateway_daily_total_does_not_double_model_usage():
+    Session = make_session()
+    observed_at = datetime(2026, 7, 21, 8, tzinfo=timezone.utc)
+    with Session() as db:
+        source = LlmUsageSource(
+            source_id="gateway-main",
+            display_name="Gateway",
+            source_type="openai_gateway",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        result = LlmUsageResult(
+            source_id="gateway-main",
+            display_name="Gateway",
+            source_type="openai_gateway",
+            status="online",
+            request_count=1,
+            token_count=90,
+            estimated_amount=0.001,
+            model_stats=[
+                {
+                    "model": "gpt-5.5",
+                    "request_count": 1,
+                    "token_count": 90,
+                    "input_tokens": 60,
+                    "output_tokens": 30,
+                    "estimated_cost_usd": 0.001,
+                }
+            ],
+        )
+
+        upsert_daily_from_result(db, result, observed_at, "Asia/Shanghai", source_db_id=source.id, replace=False)
+        total = db.query(LlmUsageDaily).filter(LlmUsageDaily.model == "__total__").one()
+
+    assert total.request_count == 1
+    assert total.token_count == 90
+    assert total.estimated_cost_usd == 0.001
