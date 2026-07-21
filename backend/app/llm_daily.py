@@ -209,14 +209,24 @@ def _newapi_values(
 ) -> list[dict[str, Any]]:
     usage_date = _local_date(collected_at, _zone(lab_timezone))
     stat = raw_summary.get("stat") if isinstance(raw_summary.get("stat"), dict) else {}
+    stat_has_count = _first_number(stat, ("count", "request_count", "total_count")) is not None
     stat_has_tokens = _first_number(stat, ("token", "tokens", "token_count", "total_tokens")) is not None
+    stat_has_quota = _first_number(stat, ("quota", "used_quota", "quota_used", "amount")) is not None
     buckets = _newapi_buckets(raw_summary)
     trusted_buckets = [bucket for bucket in buckets if _trusted_bucket(bucket)]
+    bucket_requests = sum(_number(bucket.get("request_count")) or 0 for bucket in trusted_buckets)
     sampled_tokens = sum(_number(bucket.get("input_tokens")) or 0 for bucket in trusted_buckets) + sum(
         _number(bucket.get("output_tokens")) or 0 for bucket in trusted_buckets
     )
-    if token_count is None and trusted_buckets:
+    bucket_amount = sum(_number(bucket.get("amount")) or 0 for bucket in trusted_buckets)
+    bucket_cost = sum(_number(bucket.get("estimated_cost_usd")) or 0 for bucket in trusted_buckets)
+    if not stat_has_count and trusted_buckets:
+        request_count = bucket_requests
+    if not stat_has_tokens and trusted_buckets:
         token_count = sampled_tokens
+    if not stat_has_quota and trusted_buckets:
+        quota_used = bucket_amount
+        estimated_amount = bucket_cost
     quality = "complete" if stat_has_tokens else "sampled" if trusted_buckets else "unavailable"
     total = _value(
         source_id=source_id,
@@ -283,6 +293,10 @@ def _newapi_values(
             )
     else:
         values.extend(model_values.values())
+    for item in values:
+        for key in ("request_count", "token_count", "input_tokens", "output_tokens", "estimated_amount", "estimated_cost_usd"):
+            if item.get(key) is not None:
+                item[key] = round(item[key], 6)
     return values
 
 

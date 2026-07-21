@@ -9,7 +9,7 @@ from app.db import Base, get_db
 import app.routes as routes
 from app.llm_usage import LlmUsageConfig, LlmUsageResult
 from app.main import app
-from app.models import LlmUsageSnapshot, LlmUsageSource
+from app.models import LlmUsageDaily, LlmUsageSnapshot, LlmUsageSource
 
 
 def mock_academic_config(monkeypatch):
@@ -466,6 +466,57 @@ def test_llm_usage_summary_and_models_return_aggregates(monkeypatch):
     assert models["models"][0]["model"] == "gpt-4.1-mini"
     assert models["models"][0]["amount"] == 12
     assert models["models"][0]["estimated_cost_usd"] == 0.000024
+
+
+def test_llm_usage_activity_returns_year_and_filtered_daily_totals(monkeypatch):
+    mock_academic_config(monkeypatch)
+    client, session_factory = make_client()
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="Academic Gateway",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add_all(
+            [
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=datetime(2026, 7, 18).date(),
+                    model="__total__",
+                    request_count=10,
+                    token_count=100,
+                    token_complete=True,
+                    data_quality="complete",
+                    observed_at=datetime.now(timezone.utc),
+                ),
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=datetime(2026, 7, 19).date(),
+                    model="__total__",
+                    request_count=20,
+                    token_count=None,
+                    token_complete=False,
+                    data_quality="sampled",
+                    observed_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+    response = client.get("/api/llm/usage/activity?year=2026&source=provider:academic")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["days"]) == 365
+    assert payload["active_days"] == 2
+    assert payload["total_tokens"] == 100
+    assert payload["peak_daily_tokens"] == 100
+    days = {item["date"]: item for item in payload["days"] if item["has_data"]}
+    assert days["2026-07-18"]["token_count"] == 100
+    assert days["2026-07-19"]["token_count"] is None
 
 
 def test_llm_usage_summary_prefers_newapi_official_quota_amount(monkeypatch):

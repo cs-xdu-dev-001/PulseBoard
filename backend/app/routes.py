@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import time
 import re
 from typing import Literal
 from urllib.parse import quote, quote_plus
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -26,8 +27,9 @@ from app.llm_usage import (
     LlmUsageResult,
 )
 from app.llm_usage_collector import check_model_connection, collect_llm_usage_once, collect_source, persist_result
+from app.llm_daily import TOTAL_MODEL, daily_usage_query, ensure_daily_rollups
 from app.llm_pricing import estimate_model_cost_usd, estimate_snapshot_cost_usd
-from app.models import DataSource, Gpu, GpuMetric, LlmUsageSnapshot, LlmUsageSource, Machine, MachineMetric, VpsMetric, VpsNode
+from app.models import DataSource, Gpu, GpuMetric, LlmUsageDaily, LlmUsageSnapshot, LlmUsageSource, Machine, MachineMetric, VpsMetric, VpsNode
 from app.settings_config import load_app_settings, save_app_settings
 
 router = APIRouter(prefix="/api")
@@ -345,6 +347,8 @@ def llm_usage_summary(
 ) -> dict:
     source_id, configured_source_ids = _llm_source_selection(source)
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
+    if range in {"7d", "14d", "29d"}:
+        return _llm_daily_summary(db, range, source_id, configured_source_ids, source_rows)
     snapshot_rows = _latest_llm_snapshot_rows(db, range, source_id, configured_source_ids)
     snapshots = [snapshot for snapshot, _source_row in snapshot_rows]
     request_count = sum(_snapshot_request_count(point, source_row) for point, source_row in snapshot_rows)
@@ -379,6 +383,8 @@ def llm_usage_series(
 ) -> dict:
     source_id, configured_source_ids = _llm_source_selection(source)
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
+    if range in {"7d", "14d", "29d"}:
+        return _llm_daily_series(db, range, source_id, configured_source_ids, source_rows)
     rows = _llm_snapshot_rows(
         db,
         range,
@@ -461,6 +467,79 @@ def llm_usage_series(
     }
 
 
+@router.get("/llm/usage/activity")
+def llm_usage_activity(
+    year: int = Query(default_factory=lambda: datetime.now().year, ge=2000, le=2100),
+    source: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict:
+    settings = get_settings()
+    rollup_error = None
+    try:
+        ensure_daily_rollups(
+            db,
+            settings.lab_timezone,
+            datetime.now(timezone.utc),
+            snapshot_retention_days=settings.retention_days,
+            daily_retention_days=settings.llm_daily_retention_days,
+        )
+    except Exception as exc:
+        db.rollback()
+        rollup_error = str(exc)[:500]
+    source_id, configured_source_ids = _llm_source_selection(source)
+    start_date = date(year, 1, 1)
+    end_date = date(year, 12, 31)
+    rows = daily_usage_query(db, start_date, end_date, source_id, configured_source_ids)
+    totals: dict[date, dict] = {}
+    for row in rows:
+        if row.model != TOTAL_MODEL:
+            continue
+        item = totals.setdefault(
+            row.usage_date,
+            {
+                "request_count": 0.0,
+                "token_count": 0.0,
+                "has_tokens": False,
+                "token_complete": True,
+                "data_quality": "complete",
+            },
+        )
+        item["request_count"] += row.request_count or 0
+        if row.token_count is not None:
+            item["token_count"] += row.token_count
+            item["has_tokens"] = True
+        item["token_complete"] = item["token_complete"] and row.token_complete
+        item["data_quality"] = _worse_data_quality(item["data_quality"], row.data_quality)
+
+    days = []
+    cursor = start_date
+    while cursor <= end_date:
+        item = totals.get(cursor)
+        days.append(
+            {
+                "date": cursor.isoformat(),
+                "request_count": round(item["request_count"], 6) if item else 0,
+                "token_count": round(item["token_count"], 6) if item and item["has_tokens"] else None,
+                "has_data": item is not None,
+                "token_complete": item["token_complete"] if item else False,
+                "data_quality": item["data_quality"] if item else "unavailable",
+            }
+        )
+        cursor += timedelta(days=1)
+    active = [item for item in days if item["has_data"] and ((item["request_count"] or 0) > 0 or (item["token_count"] or 0) > 0)]
+    token_values = [item["token_count"] for item in days if item["token_count"] is not None]
+    return {
+        "year": year,
+        "days": days,
+        "active_days": len(active),
+        "total_tokens": round(sum(token_values), 6),
+        "peak_daily_tokens": round(max(token_values), 6) if token_values else None,
+        "token_complete": all(item["token_complete"] for item in active) if active else False,
+        "rollup_status": "degraded" if rollup_error else "ready",
+        "rollup_error": rollup_error,
+    }
+
+
 @router.get("/llm/usage/models")
 def llm_usage_models(
     range: LlmRange = Query("today"),
@@ -470,6 +549,8 @@ def llm_usage_models(
     totals: dict[str, dict] = {}
     source_id, configured_source_ids = _llm_source_selection(source)
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
+    if range in {"7d", "14d", "29d"}:
+        return _llm_daily_models(db, range, source_id, configured_source_ids, source_rows)
     for snapshot in _latest_llm_snapshots(db, range, source_id, configured_source_ids):
         for item in snapshot.model_stats or []:
             model = item.get("model") or "unknown"
@@ -697,6 +778,181 @@ def _llm_range_bounds(range_value: str) -> tuple[datetime, datetime]:
 
 def _configured_llm_source_ids() -> list[str]:
     return [config["source_id"] for config in list_llm_usage_config(get_settings())]
+
+
+def _worse_data_quality(left: str, right: str) -> str:
+    order = {"complete": 0, "sampled": 1, "unavailable": 2}
+    return left if order.get(left, 2) >= order.get(right, 2) else right
+
+
+def _llm_daily_rows_for_range(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None,
+) -> tuple[list[LlmUsageDaily], list[LlmUsageSource]]:
+    settings = get_settings()
+    ensure_daily_rollups(
+        db,
+        settings.lab_timezone,
+        datetime.now(timezone.utc),
+        snapshot_retention_days=settings.retention_days,
+        daily_retention_days=settings.llm_daily_retention_days,
+    )
+    zone = ZoneInfo(settings.lab_timezone)
+    end_date = datetime.now(timezone.utc).astimezone(zone).date()
+    days = {"7d": 7, "14d": 14, "29d": 29}[range_value]
+    start_date = end_date - timedelta(days=days - 1)
+    rows = daily_usage_query(db, start_date, end_date, source_id, configured_source_ids)
+    return rows, _llm_source_rows(db, source_id, configured_source_ids)
+
+
+def _llm_daily_summary(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None,
+    source_rows: list[LlmUsageSource],
+) -> dict:
+    rows, _ = _llm_daily_rows_for_range(db, range_value, source_id, configured_source_ids)
+    totals = [row for row in rows if row.model == TOTAL_MODEL]
+    token_values = [row.token_count for row in totals if row.token_count is not None]
+    token_complete = bool(totals) and all(row.token_complete for row in totals)
+    data_quality = "complete" if token_complete else "sampled" if any(row.data_quality == "sampled" for row in totals) else "unavailable"
+    return {
+        "range": range_value,
+        "request_count": round(sum(row.request_count or 0 for row in totals), 6),
+        "token_count": round(sum(token_values), 6),
+        "estimated_amount": round(sum(row.estimated_amount or 0 for row in totals), 6),
+        "estimated_cost_usd": round(sum(row.estimated_cost_usd or 0 for row in totals), 6),
+        "avg_rpm": None,
+        "avg_tpm": None,
+        "avg_latency_seconds": None,
+        "success_rate": None,
+        "snapshot_count": len(totals),
+        **_llm_usage_capability(source_rows),
+        "token_usage_complete": token_complete,
+        "token_usage_scope": data_quality,
+        "token_usage_message": None if token_complete else "部分每日数据缺少完整Token明细，已标记为采样或不可用",
+        "logs_truncated": data_quality == "sampled",
+        "logs_total": None,
+        "logs_collected": None,
+    }
+
+
+def _llm_daily_series(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None,
+    source_rows: list[LlmUsageSource],
+) -> dict:
+    rows, _ = _llm_daily_rows_for_range(db, range_value, source_id, configured_source_ids)
+    sources_by_db_id = {source.id: source for source in source_rows}
+    series_by_source: dict[int, dict] = {}
+    model_series: dict[str, dict] = {}
+    total_rows = [row for row in rows if row.model == TOTAL_MODEL]
+    for row in total_rows:
+        source = sources_by_db_id.get(row.source_id)
+        if source is None:
+            continue
+        item = series_by_source.setdefault(
+            row.source_id,
+            {
+                "source_id": source.source_id,
+                "display_name": source.display_name,
+                "source_type": source.source_type,
+                "points": [],
+            },
+        )
+        item["points"].append(
+            {
+                "timestamp": f"{row.usage_date.isoformat()}T00:00:00",
+                "request_count": row.request_count,
+                "token_count": row.token_count,
+                "quota_used": row.estimated_amount,
+                "estimated_amount": row.estimated_amount,
+                "estimated_cost_usd": row.estimated_cost_usd,
+                "data_quality": row.data_quality,
+            }
+        )
+    for row in rows:
+        if row.model == TOTAL_MODEL:
+            continue
+        source = sources_by_db_id.get(row.source_id)
+        if source is None:
+            continue
+        item = model_series.setdefault(row.model, {"model": row.model, "display_name": row.model, "points": []})
+        item["points"].append(
+            {
+                "timestamp": f"{row.usage_date.isoformat()}T00:00:00",
+                "source_id": source.source_id,
+                "request_count": row.request_count or 0,
+                "token_count": row.token_count,
+                "amount": row.estimated_amount or 0,
+                "estimated_cost_usd": row.estimated_cost_usd or 0,
+                "pricing_basis": "deepseek_platform_cny" if row.currency == "CNY" else "newapi_quota",
+            }
+        )
+    token_complete = bool(total_rows) and all(row.token_complete for row in total_rows)
+    return {
+        "range": range_value,
+        "series": list(series_by_source.values()),
+        "model_series": sorted(
+            model_series.values(),
+            key=lambda item: sum(point.get("estimated_cost_usd") or 0 for point in item["points"]),
+            reverse=True,
+        ),
+        **_llm_usage_capability(source_rows),
+        "token_usage_complete": token_complete,
+        "token_usage_scope": "complete" if token_complete else "sampled",
+        "token_usage_message": None if token_complete else "部分每日数据缺少完整Token明细，已标记为采样或不可用",
+    }
+
+
+def _llm_daily_models(
+    db: Session,
+    range_value: str,
+    source_id: str | None,
+    configured_source_ids: list[str] | None,
+    source_rows: list[LlmUsageSource],
+) -> dict:
+    rows, _ = _llm_daily_rows_for_range(db, range_value, source_id, configured_source_ids)
+    totals: dict[str, dict] = {}
+    for row in rows:
+        if row.model == TOTAL_MODEL:
+            continue
+        item = totals.setdefault(
+            row.model,
+            {
+                "model": row.model,
+                "request_count": 0,
+                "token_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "amount": 0,
+                "estimated_cost_usd": 0,
+                "pricing_basis": "deepseek_platform_cny" if row.currency == "CNY" else "newapi_quota",
+            },
+        )
+        item["request_count"] += row.request_count or 0
+        item["token_count"] += row.token_count or 0
+        item["input_tokens"] += row.input_tokens or 0
+        item["output_tokens"] += row.output_tokens or 0
+        item["amount"] += row.estimated_amount or 0
+        item["estimated_cost_usd"] += row.estimated_cost_usd or 0
+    for item in totals.values():
+        item["request_count"] = round(item["request_count"], 6)
+        item["token_count"] = round(item["token_count"], 6)
+        item["input_tokens"] = round(item["input_tokens"], 6)
+        item["output_tokens"] = round(item["output_tokens"], 6)
+        item["amount"] = round(item["amount"], 6)
+        item["estimated_cost_usd"] = round(item["estimated_cost_usd"], 6)
+    return {
+        "range": range_value,
+        "models": sorted(totals.values(), key=lambda item: item["estimated_cost_usd"], reverse=True),
+        **_llm_usage_capability(source_rows),
+    }
 
 
 def _llm_source_selection(selection: str | None) -> tuple[str | None, list[str]]:
