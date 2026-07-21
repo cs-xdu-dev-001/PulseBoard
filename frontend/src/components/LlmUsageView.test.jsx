@@ -115,7 +115,7 @@ it('自动轮询不重复拉取全年活动数据', async () => {
   expect(fetchLlmActivity).not.toHaveBeenCalled()
 })
 
-it('同一供应商多个Key返回相同余额时只计一次账户余额', async () => {
+it('账户余额仅保留在供应商卡片，不再占用顶部KPI', async () => {
   fetchLlmSources.mockResolvedValue({
     sources: [
       {
@@ -151,7 +151,8 @@ it('同一供应商多个Key返回相同余额时只计一次账户余额', asyn
   render(<LlmUsageView />)
 
   expect(await screen.findByText('DeepSeek')).toBeVisible()
-  expect(screen.getAllByText('CNY 48.86').length).toBeGreaterThanOrEqual(2)
+  expect(screen.queryByText('账户余额')).not.toBeInTheDocument()
+  expect(screen.getAllByText('CNY 48.86')).toHaveLength(1)
   expect(screen.queryByText('CNY 146.58')).not.toBeInTheDocument()
 })
 

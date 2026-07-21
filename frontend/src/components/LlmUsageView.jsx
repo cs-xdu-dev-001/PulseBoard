@@ -124,7 +124,6 @@ export function LlmUsageView({ theme = 'dark' }) {
   }
 
   const sourceGroups = useMemo(() => groupLlmItems(sources), [sources])
-  const totalBalance = useMemo(() => totalProviderBalance(sourceGroups), [sourceGroups])
   const usageUnavailable = summary?.usage_supported === false
   const usagePartial = summary?.usage_scope === 'partial'
   const usageMessage = summary?.usage_message || series?.usage_message || ''
@@ -190,7 +189,6 @@ export function LlmUsageView({ theme = 'dark' }) {
       <div className="llm-kpi-grid">
         <Kpi label="官方消耗" value={costDisplay} hint={usageUnavailable ? '官方未提供用量统计' : costSummaryHint(costSummary)} highlight />
         <Kpi label="总请求数" value={usageUnavailable ? '--' : formatNumber(summary?.request_count)} hint={usageUnavailable ? '用量不可用' : '统计周期内调用'} />
-        <Kpi label="账户余额" value={formatBalanceValue(totalBalance)} hint="供应商账户去重" />
         <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
       </div>
 
@@ -931,17 +929,6 @@ function providerBalanceValue(items) {
     return balanceValueFromUniqueBalances(uniqueBalances, 'usd')
   }
   return null
-}
-
-function totalProviderBalance(groups) {
-  const totals = new Map()
-  for (const group of groups) {
-    const balance = providerBalanceValue(group.items)
-    if (!balance || balance.kind !== 'money') continue
-    totals.set(balance.currency, (totals.get(balance.currency) || 0) + balance.value)
-  }
-  const values = Array.from(totals.entries()).map(([currency, value]) => ({ currency, value }))
-  return balanceValueFromUniqueBalances(values)
 }
 
 function uniqueBalanceValues(items, currencyOf, valueOf) {

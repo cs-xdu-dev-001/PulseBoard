@@ -315,10 +315,11 @@ def _deepseek_values(
     for item in daily:
         if not isinstance(item, dict):
             continue
+        usage_date = _local_date(item.get("time") or collected_at, _zone(lab_timezone))
         values.append(
             _value(
                 source_id=source_id,
-                usage_date=_local_date(item.get("time") or collected_at, _zone(lab_timezone)),
+                usage_date=usage_date,
                 model=TOTAL_MODEL,
                 request_count=_number(item.get("request_count")),
                 token_count=_number(item.get("token_count")),
@@ -332,6 +333,27 @@ def _deepseek_values(
                 observed_at=collected_at,
             )
         )
+        models = item.get("models") if isinstance(item.get("models"), list) else []
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            values.append(
+                _value(
+                    source_id=source_id,
+                    usage_date=usage_date,
+                    model=str(model.get("model") or "unknown"),
+                    request_count=_number(model.get("request_count")),
+                    token_count=_number(model.get("token_count")),
+                    input_tokens=_number(model.get("input_tokens")),
+                    output_tokens=_number(model.get("output_tokens")),
+                    estimated_amount=_number(model.get("amount")),
+                    estimated_cost_usd=_number(model.get("amount")),
+                    currency=currency,
+                    token_complete=_number(model.get("token_count")) is not None,
+                    data_quality="complete" if _number(model.get("token_count")) is not None else "unavailable",
+                    observed_at=collected_at,
+                )
+            )
     if values:
         return values
     return [

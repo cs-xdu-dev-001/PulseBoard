@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -466,6 +467,108 @@ def test_llm_usage_summary_and_models_return_aggregates(monkeypatch):
     assert models["models"][0]["model"] == "gpt-4.1-mini"
     assert models["models"][0]["amount"] == 12
     assert models["models"][0]["estimated_cost_usd"] == 0.000024
+
+
+def test_llm_usage_today_uses_local_daily_rows_instead_of_cumulative_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "list_llm_usage_config",
+        lambda _settings: [
+            {
+                "source_id": "deepseek-main",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "display_name": "DeepSeek主Key",
+                "source_type": "deepseek_platform",
+            }
+        ],
+    )
+    client, session_factory = make_client()
+    now = datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo("Asia/Shanghai")).date()
+    yesterday = today - timedelta(days=1)
+    with session_factory() as db:
+        source = LlmUsageSource(
+            source_id="deepseek-main",
+            display_name="DeepSeek主Key",
+            source_type="deepseek_platform",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add_all(
+            [
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=yesterday,
+                    model="__total__",
+                    request_count=242_715,
+                    token_count=298_697_500,
+                    token_complete=True,
+                    data_quality="complete",
+                    observed_at=now,
+                ),
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=today,
+                    model="__total__",
+                    request_count=5,
+                    token_count=500,
+                    token_complete=True,
+                    data_quality="complete",
+                    observed_at=now,
+                ),
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=today,
+                    model="deepseek-v4-flash",
+                    request_count=4,
+                    token_count=450,
+                    token_complete=True,
+                    data_quality="complete",
+                    observed_at=now,
+                ),
+                LlmUsageDaily(
+                    source_id=source.id,
+                    usage_date=yesterday,
+                    model="deepseek-v4-flash",
+                    request_count=241_157,
+                    token_count=298_417_756,
+                    token_complete=True,
+                    data_quality="complete",
+                    observed_at=now,
+                ),
+                LlmUsageSnapshot(
+                    source_id=source.id,
+                    collected_at=now,
+                    range_key="latest",
+                    request_count=242_715,
+                    token_count=298_697_500,
+                    estimated_amount=314.4,
+                    model_stats=[
+                        {
+                            "model": "deepseek-v4-flash",
+                            "request_count": 241_157,
+                            "token_count": 298_417_756,
+                            "amount": 313.9,
+                            "pricing_basis": "deepseek_platform_cny",
+                        }
+                    ],
+                    raw_summary={"deepseek_platform": {"daily": []}},
+                ),
+            ]
+        )
+        db.commit()
+
+    summary = client.get("/api/llm/usage/summary?range=today&source=provider:deepseek").json()
+    series = client.get("/api/llm/usage/series?range=today&source=provider:deepseek").json()
+    models = client.get("/api/llm/usage/models?range=today&source=provider:deepseek").json()
+
+    assert summary["request_count"] == 5
+    assert summary["token_count"] == 500
+    assert series["series"][0]["points"][0]["request_count"] == 5
+    assert series["model_series"][0]["points"][0]["request_count"] == 4
+    assert models["models"][0]["request_count"] == 4
 
 
 def test_llm_usage_activity_returns_year_and_filtered_daily_totals(monkeypatch):

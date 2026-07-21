@@ -434,6 +434,7 @@ def normalize_deepseek_platform(config: LlmUsageConfig, payloads: dict[str, Any]
                     "input_tokens": 0,
                     "output_tokens": 0,
                     "amount": 0,
+                    "models": {},
                 },
             )
             daily["request_count"] += request_count
@@ -441,6 +442,22 @@ def normalize_deepseek_platform(config: LlmUsageConfig, payloads: dict[str, Any]
             daily["input_tokens"] += input_tokens
             daily["output_tokens"] += output_tokens
             daily["amount"] += cost
+            daily_model = daily["models"].setdefault(
+                model,
+                {
+                    "model": model,
+                    "request_count": 0,
+                    "token_count": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "amount": 0,
+                },
+            )
+            daily_model["request_count"] += request_count
+            daily_model["token_count"] += token_count
+            daily_model["input_tokens"] += input_tokens
+            daily_model["output_tokens"] += output_tokens
+            daily_model["amount"] += cost
 
     model_stats = sorted(
         [_rounded_deepseek_platform_model(item) for item in model_totals.values()],
@@ -1002,6 +1019,7 @@ def _rounded_deepseek_platform_model(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rounded_deepseek_platform_daily(item: dict[str, Any]) -> dict[str, Any]:
+    models = item.get("models") if isinstance(item.get("models"), dict) else {}
     return {
         **item,
         "request_count": _round_number(item["request_count"]),
@@ -1009,6 +1027,17 @@ def _rounded_deepseek_platform_daily(item: dict[str, Any]) -> dict[str, Any]:
         "input_tokens": _round_number(item["input_tokens"]),
         "output_tokens": _round_number(item["output_tokens"]),
         "amount": _round_number(item["amount"]),
+        "models": [
+            {
+                **model,
+                "request_count": _round_number(model["request_count"]),
+                "token_count": _round_number(model["token_count"]),
+                "input_tokens": _round_number(model["input_tokens"]),
+                "output_tokens": _round_number(model["output_tokens"]),
+                "amount": _round_number(model["amount"]),
+            }
+            for _name, model in sorted(models.items())
+        ],
     }
 
 

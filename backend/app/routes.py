@@ -350,11 +350,28 @@ def llm_usage_summary(
     if range in {"7d", "14d", "29d"}:
         return _llm_daily_summary(db, range, source_id, configured_source_ids, source_rows)
     snapshot_rows = _latest_llm_snapshot_rows(db, range, source_id, configured_source_ids)
+    daily_totals: list[LlmUsageDaily] = []
+    if range == "today":
+        deepseek_source_ids = {row.id for row in source_rows if row.source_type == "deepseek_platform"}
+        if deepseek_source_ids:
+            daily_rows, _ = _llm_daily_rows_for_range(db, range, source_id, configured_source_ids)
+            daily_totals = [
+                row for row in daily_rows if row.source_id in deepseek_source_ids and row.model == TOTAL_MODEL
+            ]
+            snapshot_rows = [row for row in snapshot_rows if row[1].id not in deepseek_source_ids]
     snapshots = [snapshot for snapshot, _source_row in snapshot_rows]
-    request_count = sum(_snapshot_request_count(point, source_row) for point, source_row in snapshot_rows)
-    token_count = sum(_snapshot_token_count(point, source_row) for point, source_row in snapshot_rows)
-    amount = sum(point.estimated_amount or 0 for point in snapshots)
-    estimated_cost = sum(_snapshot_cost(point) or 0 for point in snapshots)
+    request_count = sum(_snapshot_request_count(point, source_row) for point, source_row in snapshot_rows) + sum(
+        row.request_count or 0 for row in daily_totals
+    )
+    token_count = sum(_snapshot_token_count(point, source_row) for point, source_row in snapshot_rows) + sum(
+        row.token_count or 0 for row in daily_totals
+    )
+    amount = sum(point.estimated_amount or 0 for point in snapshots) + sum(
+        row.estimated_amount or 0 for row in daily_totals
+    )
+    estimated_cost = sum(_snapshot_cost(point) or 0 for point in snapshots) + sum(
+        row.estimated_cost_usd or 0 for row in daily_totals
+    )
     rpm_values = [point.rpm for point in snapshots if point.rpm is not None]
     tpm_values = [point.tpm for point in snapshots if point.tpm is not None]
     latency_values = [point.avg_latency_seconds for point in snapshots if point.avg_latency_seconds is not None]
@@ -369,7 +386,7 @@ def llm_usage_summary(
         "avg_tpm": round(sum(tpm_values) / len(tpm_values), 4) if tpm_values else None,
         "avg_latency_seconds": round(sum(latency_values) / len(latency_values), 4) if latency_values else None,
         "success_rate": round(sum(success_values) / len(success_values), 4) if success_values else None,
-        "snapshot_count": len(snapshots),
+        "snapshot_count": len(snapshots) + len(daily_totals),
         **_llm_usage_capability(source_rows),
         **_llm_token_usage_status(snapshot_rows),
     }
@@ -385,6 +402,20 @@ def llm_usage_series(
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     if range in {"7d", "14d", "29d"}:
         return _llm_daily_series(db, range, source_id, configured_source_ids, source_rows)
+    deepseek_daily = None
+    deepseek_source_rows = []
+    deepseek_source_ids = set()
+    if range == "today":
+        deepseek_source_rows = [row for row in source_rows if row.source_type == "deepseek_platform"]
+        deepseek_source_ids = {row.id for row in deepseek_source_rows}
+    if deepseek_source_rows:
+        deepseek_daily = _llm_daily_series(
+            db,
+            range,
+            source_id,
+            [row.source_id for row in deepseek_source_rows],
+            deepseek_source_rows,
+        )
     rows = _llm_snapshot_rows(
         db,
         range,
@@ -392,6 +423,8 @@ def llm_usage_series(
         configured_source_ids,
         per_source_limit=_llm_series_point_limit(range),
     )
+    if deepseek_source_ids:
+        rows = [row for row in rows if row[1].id not in deepseek_source_ids]
     series_by_source: dict[int, dict] = {}
     series_by_model: dict[str, dict] = {}
     latest_bucket_snapshot_ids = _latest_newapi_bucket_snapshot_ids_by_day(rows)
@@ -454,6 +487,18 @@ def llm_usage_series(
                     "pricing_basis": estimate["pricing_basis"],
                 }
             )
+    if deepseek_daily:
+        source_ids_by_name = {row.source_id: row.id for row in deepseek_source_rows}
+        for item in deepseek_daily["series"]:
+            source_db_id = source_ids_by_name.get(item["source_id"])
+            if source_db_id is not None:
+                series_by_source[source_db_id] = item
+        for item in deepseek_daily["model_series"]:
+            current = series_by_model.setdefault(
+                item["model"],
+                {"model": item["model"], "display_name": item.get("display_name") or item["model"], "points": []},
+            )
+            current["points"].extend(item["points"])
     return {
         "range": range,
         "series": list(series_by_source.values()),
@@ -551,7 +596,21 @@ def llm_usage_models(
     source_rows = _llm_source_rows(db, source_id, configured_source_ids)
     if range in {"7d", "14d", "29d"}:
         return _llm_daily_models(db, range, source_id, configured_source_ids, source_rows)
-    for snapshot in _latest_llm_snapshots(db, range, source_id, configured_source_ids):
+    snapshot_rows = _latest_llm_snapshot_rows(db, range, source_id, configured_source_ids)
+    deepseek_daily_models = []
+    if range == "today":
+        deepseek_source_rows = [row for row in source_rows if row.source_type == "deepseek_platform"]
+        deepseek_source_ids = {row.id for row in deepseek_source_rows}
+        if deepseek_source_rows:
+            deepseek_daily_models = _llm_daily_models(
+                db,
+                range,
+                source_id,
+                [row.source_id for row in deepseek_source_rows],
+                deepseek_source_rows,
+            )["models"]
+            snapshot_rows = [row for row in snapshot_rows if row[1].id not in deepseek_source_ids]
+    for snapshot, _source_row in snapshot_rows:
         for item in snapshot.model_stats or []:
             model = item.get("model") or "unknown"
             total = totals.setdefault(
@@ -575,6 +634,23 @@ def llm_usage_models(
             if item.get("pricing_basis") == "deepseek_platform_cny":
                 total["estimated_cost_usd"] += item.get("estimated_cost_usd") or item.get("amount") or 0
                 total["pricing_basis"] = "deepseek_platform_cny"
+    for daily_model in deepseek_daily_models:
+        total = totals.setdefault(
+            daily_model["model"],
+            {
+                "model": daily_model["model"],
+                "request_count": 0,
+                "token_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "amount": 0,
+                "estimated_cost_usd": 0,
+                "pricing_basis": "deepseek_platform_cny",
+            },
+        )
+        for key in ("request_count", "token_count", "input_tokens", "output_tokens", "amount", "estimated_cost_usd"):
+            total[key] += daily_model.get(key) or 0
+        total["pricing_basis"] = "deepseek_platform_cny"
     for total in totals.values():
         if total.get("pricing_basis") == "deepseek_platform_cny":
             total["estimated_cost_usd"] = round(total["estimated_cost_usd"] or total["amount"], 6)
@@ -801,7 +877,7 @@ def _llm_daily_rows_for_range(
     )
     zone = ZoneInfo(settings.lab_timezone)
     end_date = datetime.now(timezone.utc).astimezone(zone).date()
-    days = {"7d": 7, "14d": 14, "29d": 29}[range_value]
+    days = {"today": 1, "7d": 7, "14d": 14, "29d": 29}[range_value]
     start_date = end_date - timedelta(days=days - 1)
     rows = daily_usage_query(db, start_date, end_date, source_id, configured_source_ids)
     return rows, _llm_source_rows(db, source_id, configured_source_ids)

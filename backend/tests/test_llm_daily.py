@@ -154,6 +154,68 @@ def test_rebuild_daily_rollups_reads_deepseek_daily_buckets():
     assert all(row.currency == "CNY" for row in rows)
 
 
+def test_rebuild_daily_rollups_reads_deepseek_daily_model_buckets():
+    Session = make_session()
+    observed_at = datetime(2026, 7, 21, 8, tzinfo=timezone.utc)
+    with Session() as db:
+        source = LlmUsageSource(
+            source_id="deepseek-main",
+            display_name="DeepSeek",
+            source_type="deepseek_platform",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageSnapshot(
+                source_id=source.id,
+                collected_at=observed_at,
+                range_key="latest",
+                raw_summary={
+                    "deepseek_platform": {
+                        "currency": "CNY",
+                        "daily": [
+                            {
+                                "time": 1784592000,
+                                "request_count": 5,
+                                "token_count": 500,
+                                "amount": 1.5,
+                                "models": [
+                                    {
+                                        "model": "deepseek-v4-flash",
+                                        "request_count": 4,
+                                        "token_count": 450,
+                                        "input_tokens": 400,
+                                        "output_tokens": 50,
+                                        "amount": 1.2,
+                                    },
+                                    {
+                                        "model": "deepseek-v4-pro",
+                                        "request_count": 1,
+                                        "token_count": 50,
+                                        "input_tokens": 40,
+                                        "output_tokens": 10,
+                                        "amount": 0.3,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                },
+            )
+        )
+        db.commit()
+
+        rebuild_daily_rollups(db, "Asia/Shanghai", observed_at)
+        rows = db.query(LlmUsageDaily).order_by(LlmUsageDaily.model).all()
+
+    assert [row.model for row in rows] == ["__total__", "deepseek-v4-flash", "deepseek-v4-pro"]
+    flash = next(row for row in rows if row.model == "deepseek-v4-flash")
+    assert flash.request_count == 4
+    assert flash.token_count == 450
+    assert flash.estimated_cost_usd == 1.2
+
+
 def test_gateway_daily_total_does_not_double_model_usage():
     Session = make_session()
     observed_at = datetime(2026, 7, 21, 8, tzinfo=timezone.utc)

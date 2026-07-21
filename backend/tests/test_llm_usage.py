@@ -181,6 +181,16 @@ def test_normalize_deepseek_platform_extracts_key_model_and_daily_usage():
         }
     ]
     assert len(result.raw_summary["deepseek_platform"]["daily"]) == 2
+    assert result.raw_summary["deepseek_platform"]["daily"][0]["models"] == [
+        {
+            "model": "deepseek-v4-flash",
+            "request_count": 1,
+            "token_count": 10,
+            "input_tokens": 9,
+            "output_tokens": 1,
+            "amount": 0.000011,
+        }
+    ]
 
 
 def test_collect_deepseek_platform_calls_official_usage_endpoints(monkeypatch):
