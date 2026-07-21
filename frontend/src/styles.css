@@ -1698,21 +1698,21 @@ footer {
 }
 
 .activity-cell.level-1 {
-  border-color: rgba(125, 211, 252, 0.24);
-  background: rgba(56, 189, 248, 0.22);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.08);
+  border-color: rgba(186, 230, 253, 0.3);
+  background: #50788c;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.06);
 }
 
 .activity-cell.level-2 {
-  border-color: rgba(56, 189, 248, 0.38);
-  background: rgba(14, 165, 233, 0.44);
-  box-shadow: 0 0 13px rgba(14, 165, 233, 0.14);
+  border-color: rgba(125, 211, 252, 0.42);
+  background: #2f7393;
+  box-shadow: 0 0 11px rgba(14, 165, 233, 0.12);
 }
 
 .activity-cell.level-3 {
-  border-color: rgba(56, 189, 248, 0.58);
-  background: rgba(2, 132, 199, 0.72);
-  box-shadow: 0 0 17px rgba(14, 165, 233, 0.22);
+  border-color: rgba(125, 211, 252, 0.58);
+  background: #176b9a;
+  box-shadow: 0 0 15px rgba(14, 165, 233, 0.18);
 }
 
 .activity-cell.level-4 {
@@ -1722,8 +1722,8 @@ footer {
 }
 
 .activity-cell.today {
-  border-color: rgba(232, 251, 255, 0.92);
-  box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.52), 0 0 24px rgba(125, 211, 252, 0.42);
+  border-color: rgba(224, 242, 254, 0.72);
+  box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.24);
 }
 
 .activity-months {
