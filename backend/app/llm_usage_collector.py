@@ -19,6 +19,7 @@ from app.llm_usage import (
     normalize_deepseek_platform,
     normalize_newapi,
 )
+from app.llm_daily import cleanup_daily_rollups, upsert_daily_from_result
 from app.models import LlmUsageSnapshot, LlmUsageSource
 
 
@@ -49,7 +50,14 @@ def collect_llm_usage_once(db: Session, settings: Settings) -> None:
         if config.source_type == "openai_gateway":
             continue
         result = collect_source(config)
-        persist_result(db, result, datetime.now(timezone.utc))
+        persist_result(db, result, datetime.now(timezone.utc), lab_timezone=settings.lab_timezone)
+    cleanup_daily_rollups(
+        db,
+        datetime.now(timezone.utc),
+        snapshot_retention_days=settings.retention_days,
+        daily_retention_days=settings.llm_daily_retention_days,
+        lab_timezone=settings.lab_timezone,
+    )
     db.commit()
 
 
@@ -514,7 +522,12 @@ def get_or_create_source(db: Session, result: LlmUsageResult) -> LlmUsageSource:
     return source
 
 
-def persist_result(db: Session, result: LlmUsageResult, collected_at: datetime) -> None:
+def persist_result(
+    db: Session,
+    result: LlmUsageResult,
+    collected_at: datetime,
+    lab_timezone: str = "Asia/Shanghai",
+) -> None:
     source = get_or_create_source(db, result)
     source.display_name = result.display_name
     source.source_type = result.source_type
@@ -544,4 +557,12 @@ def persist_result(db: Session, result: LlmUsageResult, collected_at: datetime) 
             model_stats=result.model_stats or [],
             raw_summary=result.raw_summary or {},
         )
+    )
+    upsert_daily_from_result(
+        db,
+        result,
+        collected_at,
+        lab_timezone,
+        source_db_id=source.id,
+        replace=result.source_type != "openai_gateway",
     )

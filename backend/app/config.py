@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     traffic_quota_reset_day: int = 18
     llm_usage_sources: str = ""
     llm_usage_interval_seconds: int = 300
+    llm_daily_retention_days: int = 365
 
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",

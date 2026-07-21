@@ -557,7 +557,7 @@ async def llm_gateway_proxy(
     )
     latency = time.perf_counter() - started
     result = _gateway_usage_result(config, forward_payload, response, latency)
-    persist_result(db, result, datetime.now(timezone.utc))
+    persist_result(db, result, datetime.now(timezone.utc), lab_timezone=get_settings().lab_timezone)
     db.commit()
     return Response(
         content=response.content,
