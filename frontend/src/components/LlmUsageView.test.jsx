@@ -95,6 +95,21 @@ it('月度活动独立拉取全年每日数据，不受顶部今天范围限制'
   expect(screen.getByTitle(new RegExp(`${localDateKey(yesterday)}：Token：3.10K，31次请求`))).toBeVisible()
 })
 
+it('月度活动Token达到100M后使用B单位', async () => {
+  const today = new Date()
+  fetchLlmActivity.mockResolvedValue({
+    days: [
+      { date: localDateKey(today), request_count: 1539, token_count: 100_000_000, has_data: true, token_complete: true, data_quality: 'complete' },
+    ],
+    active_days: 1,
+    token_complete: true,
+  })
+
+  render(<LlmUsageView />)
+
+  expect(await screen.findByTitle(new RegExp(`${localDateKey(today)}：Token：0.1B，1,539次请求`))).toBeVisible()
+})
+
 it('自动轮询不重复拉取全年活动数据', async () => {
   vi.useFakeTimers()
   render(<LlmUsageView />)

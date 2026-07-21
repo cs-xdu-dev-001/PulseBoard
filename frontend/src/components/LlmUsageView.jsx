@@ -311,8 +311,8 @@ function ActivityHeatmap({ days, usageUnavailable, tokenIncomplete }) {
               <span
                 key={day.key}
                 className={`activity-cell level-${activityLevel(day.value, thresholds)} row-${index % 7} ${day.isToday ? 'today' : ''}`}
-                data-tooltip={`${day.key}：Token：${day.tokenAvailable ? formatCompact(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
-                title={`${day.key}：Token：${day.tokenAvailable ? formatCompact(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
+                data-tooltip={`${day.key}：Token：${day.tokenAvailable ? formatActivityTokens(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
+                title={`${day.key}：Token：${day.tokenAvailable ? formatActivityTokens(day.tokens) : '不可用'}，${formatNumber(day.requests)}次请求${day.dataQuality === 'sampled' || tokenIncomplete ? '，采样' : ''}`}
               />
             ))}
           </div>
@@ -1080,6 +1080,13 @@ function formatCompact(value) {
   if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toFixed(2)}M`
   if (Math.abs(number) >= 1_000) return `${(number / 1_000).toFixed(2)}K`
   return number.toFixed(2)
+}
+
+function formatActivityTokens(value) {
+  const number = Number(value)
+  if (Math.abs(number) < 100_000_000) return formatCompact(number)
+  const billions = (number / 1_000_000_000).toFixed(2).replace(/\.?0+$/, '')
+  return `${billions}B`
 }
 
 function formatTime(value) {

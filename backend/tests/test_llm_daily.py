@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import BigInteger, Double, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -20,6 +20,32 @@ def make_session():
     )
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def test_llm_usage_numeric_columns_preserve_large_counts_and_amounts():
+    for column in (
+        LlmUsageSnapshot.__table__.c.request_count,
+        LlmUsageSnapshot.__table__.c.token_count,
+        LlmUsageDaily.__table__.c.request_count,
+        LlmUsageDaily.__table__.c.token_count,
+        LlmUsageDaily.__table__.c.input_tokens,
+        LlmUsageDaily.__table__.c.output_tokens,
+    ):
+        assert isinstance(column.type, BigInteger)
+
+    for column in (
+        LlmUsageSource.__table__.c.balance_total,
+        LlmUsageSource.__table__.c.balance_granted,
+        LlmUsageSource.__table__.c.balance_topped_up,
+        LlmUsageSource.__table__.c.quota_total,
+        LlmUsageSource.__table__.c.quota_used,
+        LlmUsageSource.__table__.c.quota_remaining,
+        LlmUsageSnapshot.__table__.c.quota_used,
+        LlmUsageSnapshot.__table__.c.estimated_amount,
+        LlmUsageDaily.__table__.c.estimated_amount,
+        LlmUsageDaily.__table__.c.estimated_cost_usd,
+    ):
+        assert isinstance(column.type, Double)
 
 
 def test_llm_usage_daily_has_defaults_and_unique_source_date_model():

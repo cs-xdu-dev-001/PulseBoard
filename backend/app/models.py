@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Double, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -144,12 +144,12 @@ class LlmUsageSource(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_error: Mapped[str | None] = mapped_column(Text)
     balance_currency: Mapped[str | None] = mapped_column(String(16))
-    balance_total: Mapped[float | None] = mapped_column(Float)
-    balance_granted: Mapped[float | None] = mapped_column(Float)
-    balance_topped_up: Mapped[float | None] = mapped_column(Float)
-    quota_total: Mapped[float | None] = mapped_column(Float)
-    quota_used: Mapped[float | None] = mapped_column(Float)
-    quota_remaining: Mapped[float | None] = mapped_column(Float)
+    balance_total: Mapped[float | None] = mapped_column(Double)
+    balance_granted: Mapped[float | None] = mapped_column(Double)
+    balance_topped_up: Mapped[float | None] = mapped_column(Double)
+    quota_total: Mapped[float | None] = mapped_column(Double)
+    quota_used: Mapped[float | None] = mapped_column(Double)
+    quota_remaining: Mapped[float | None] = mapped_column(Double)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -164,10 +164,10 @@ class LlmUsageSnapshot(Base):
     source_id: Mapped[int] = mapped_column(ForeignKey("llm_usage_sources.id"), nullable=False, index=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     range_key: Mapped[str] = mapped_column(String(32), nullable=False)
-    request_count: Mapped[float | None] = mapped_column(Float)
-    token_count: Mapped[float | None] = mapped_column(Float)
-    quota_used: Mapped[float | None] = mapped_column(Float)
-    estimated_amount: Mapped[float | None] = mapped_column(Float)
+    request_count: Mapped[int | None] = mapped_column(BigInteger)
+    token_count: Mapped[int | None] = mapped_column(BigInteger)
+    quota_used: Mapped[float | None] = mapped_column(Double)
+    estimated_amount: Mapped[float | None] = mapped_column(Double)
     rpm: Mapped[float | None] = mapped_column(Float)
     tpm: Mapped[float | None] = mapped_column(Float)
     success_rate: Mapped[float | None] = mapped_column(Float)
@@ -187,12 +187,12 @@ class LlmUsageDaily(Base):
     source_id: Mapped[int] = mapped_column(ForeignKey("llm_usage_sources.id"), nullable=False, index=True)
     usage_date: Mapped[date] = mapped_column(Date, nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
-    request_count: Mapped[float | None] = mapped_column(Float)
-    token_count: Mapped[float | None] = mapped_column(Float)
-    input_tokens: Mapped[float | None] = mapped_column(Float)
-    output_tokens: Mapped[float | None] = mapped_column(Float)
-    estimated_amount: Mapped[float | None] = mapped_column(Float)
-    estimated_cost_usd: Mapped[float | None] = mapped_column(Float)
+    request_count: Mapped[int | None] = mapped_column(BigInteger)
+    token_count: Mapped[int | None] = mapped_column(BigInteger)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    estimated_amount: Mapped[float | None] = mapped_column(Double)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Double)
     currency: Mapped[str | None] = mapped_column(String(16))
     token_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     data_quality: Mapped[str] = mapped_column(String(16), default="unavailable", nullable=False)
