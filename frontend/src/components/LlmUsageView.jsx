@@ -187,9 +187,9 @@ export function LlmUsageView({ theme = 'dark' }) {
       )}
 
       <div className="llm-kpi-grid">
-        <Kpi label="官方消耗" value={costDisplay} hint={usageUnavailable ? '官方未提供用量统计' : costSummaryHint(costSummary)} highlight />
-        <Kpi label="总请求数" value={usageUnavailable ? '--' : formatNumber(summary?.request_count)} hint={usageUnavailable ? '用量不可用' : '统计周期内调用'} />
-        <Kpi label="常用模型" value={topModel} hint="按费用或调用排序" />
+        <Kpi label="官方消耗" value={costDisplay} highlight />
+        <Kpi label="总请求数" value={usageUnavailable ? '--' : formatNumber(summary?.request_count)} />
+        <Kpi label="常用模型" value={topModel} />
       </div>
 
       <PerformanceStrip summary={summary} models={models} usageUnavailable={usageUnavailable} tokenIncomplete={tokenIncomplete} />
@@ -471,12 +471,11 @@ function ProviderCard({ group, activeSource, expanded, onToggle, onSelectProvide
   )
 }
 
-function Kpi({ label, value, hint, highlight = false }) {
+function Kpi({ label, value, highlight = false }) {
   return (
     <article className={`llm-kpi ${highlight ? 'highlight' : ''}`}>
       <span>{label}</span>
       <strong title={String(value)}>{value}</strong>
-      <small>{hint}</small>
     </article>
   )
 }
@@ -1014,11 +1013,6 @@ function costSummaryFromModels(models, fallbackUsd) {
 function currencyForPricingBasis(value) {
   if (value === 'deepseek_platform_cny') return 'CNY'
   return 'USD'
-}
-
-function costSummaryHint(summary) {
-  if (summary?.kind === 'mixed') return '按币种分开显示'
-  return '优先采用供应商统计'
 }
 
 function formatCostSummary(summary) {
