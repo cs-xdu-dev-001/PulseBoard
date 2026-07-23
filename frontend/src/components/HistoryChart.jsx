@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useRef } from 'react'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import {
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([
+  CanvasRenderer,
+  GridComponent,
+  LegendComponent,
+  LineChart,
+  TitleComponent,
+  TooltipComponent,
+])
 
 export function HistoryChart({ title, data, metric, unit, kind = 'gpu', theme = 'dark' }) {
   const ref = useRef(null)

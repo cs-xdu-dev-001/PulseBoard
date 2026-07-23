@@ -1,7 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-async function getJson(path) {
-  const response = await fetch(`${API_BASE}${path}`)
+async function getJson(path, options) {
+  const response = options
+    ? await fetch(`${API_BASE}${path}`, options)
+    : await fetch(`${API_BASE}${path}`)
   if (!response.ok) {
     throw new Error(await readErrorMessage(response))
   }
@@ -39,8 +41,8 @@ export function fetchVpsHistory(range) {
   return getJson(`/api/history/vps?range=${range}`)
 }
 
-export function fetchLlmSources() {
-  return getJson('/api/llm/usage/sources')
+export function fetchLlmSources(options) {
+  return getJson('/api/llm/usage/sources', options)
 }
 
 export function fetchLlmConfig() {
@@ -95,28 +97,28 @@ export async function deleteLlmProvider(providerId) {
   return response.json()
 }
 
-export function fetchLlmSummary(range, source = '') {
+export function fetchLlmSummary(range, source = '', options) {
   const params = new URLSearchParams({ range })
   if (source) params.set('source', source)
-  return getJson(`/api/llm/usage/summary?${params}`)
+  return getJson(`/api/llm/usage/summary?${params}`, options)
 }
 
-export function fetchLlmSeries(range, source = '') {
+export function fetchLlmSeries(range, source = '', options) {
   const params = new URLSearchParams({ range })
   if (source) params.set('source', source)
-  return getJson(`/api/llm/usage/series?${params}`)
+  return getJson(`/api/llm/usage/series?${params}`, options)
 }
 
-export function fetchLlmModels(range, source = '') {
+export function fetchLlmModels(range, source = '', options) {
   const params = new URLSearchParams({ range })
   if (source) params.set('source', source)
-  return getJson(`/api/llm/usage/models?${params}`)
+  return getJson(`/api/llm/usage/models?${params}`, options)
 }
 
-export function fetchLlmActivity(year, source = '') {
+export function fetchLlmActivity(year, source = '', options) {
   const params = new URLSearchParams({ year: String(year) })
   if (source) params.set('source', source)
-  return getJson(`/api/llm/usage/activity?${params}`)
+  return getJson(`/api/llm/usage/activity?${params}`, options)
 }
 
 export async function refreshLlmUsage() {

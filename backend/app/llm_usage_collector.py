@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import re
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.orm import Session
@@ -49,7 +50,7 @@ def collect_llm_usage_once(db: Session, settings: Settings) -> None:
     for config in load_llm_usage_configs(settings):
         if config.source_type == "openai_gateway":
             continue
-        result = collect_source(config)
+        result = collect_source(config, lab_timezone=settings.lab_timezone)
         persist_result(db, result, datetime.now(timezone.utc), lab_timezone=settings.lab_timezone)
     cleanup_daily_rollups(
         db,
@@ -61,14 +62,42 @@ def collect_llm_usage_once(db: Session, settings: Settings) -> None:
     db.commit()
 
 
-def collect_source(config: LlmUsageConfig) -> LlmUsageResult:
+def collect_llm_usage_daily_once(db: Session, settings: Settings, target_date: date) -> None:
+    collected_at = datetime.now(timezone.utc)
+    for config in load_llm_usage_configs(settings):
+        if config.source_type not in {"newapi_admin", "deepseek_platform"}:
+            continue
+        result = collect_source(
+            config,
+            usage_date=target_date,
+            lab_timezone=settings.lab_timezone,
+        )
+        source = get_or_create_source(db, result)
+        upsert_daily_from_result(
+            db,
+            result,
+            collected_at,
+            settings.lab_timezone,
+            source_db_id=source.id,
+            replace=True,
+            target_date=target_date,
+        )
+    db.commit()
+
+
+def collect_source(
+    config: LlmUsageConfig,
+    *,
+    usage_date: date | None = None,
+    lab_timezone: str = "Asia/Shanghai",
+) -> LlmUsageResult:
     try:
         if config.source_type == "deepseek_balance":
             return collect_deepseek(config)
         if config.source_type == "deepseek_platform":
-            return collect_deepseek_platform(config)
+            return collect_deepseek_platform(config, usage_date=usage_date)
         if config.source_type == "newapi_admin":
-            return collect_newapi(config)
+            return collect_newapi(config, usage_date=usage_date, lab_timezone=lab_timezone)
         if config.source_type == "openai_gateway":
             return collect_openai_gateway_config(config)
         return error_result(config, f"Unsupported LLM usage source type: {config.source_type}")
@@ -88,10 +117,14 @@ def collect_deepseek(config: LlmUsageConfig) -> LlmUsageResult:
     return normalize_deepseek_balance(config, response.json())
 
 
-def collect_deepseek_platform(config: LlmUsageConfig) -> LlmUsageResult:
+def collect_deepseek_platform(
+    config: LlmUsageConfig,
+    *,
+    usage_date: date | None = None,
+) -> LlmUsageResult:
     if not config.access_token:
         return error_result(config, "DeepSeek platform token is not configured")
-    start, end = _deepseek_platform_range()
+    start, end = _deepseek_platform_range(usage_date=usage_date)
     headers = _deepseek_platform_headers(config.access_token)
     payloads = {}
     with httpx.Client(timeout=20) as client:
@@ -134,13 +167,22 @@ def collect_openai_gateway_config(config: LlmUsageConfig) -> LlmUsageResult:
     )
 
 
-def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
+def collect_newapi(
+    config: LlmUsageConfig,
+    *,
+    usage_date: date | None = None,
+    lab_timezone: str = "Asia/Shanghai",
+) -> LlmUsageResult:
     if not config.base_url:
         return error_result(config, "New API base URL is not configured")
     if not config.api_key and not config.access_token:
         return error_result(config, "New API API key or access token is not configured")
     payloads = {}
-    time_query = _today_timestamp_query()
+    time_query = (
+        _date_timestamp_query(usage_date, lab_timezone)
+        if usage_date is not None
+        else _today_timestamp_query(lab_timezone=lab_timezone)
+    )
     with httpx.Client(timeout=20) as client:
         if config.access_token:
             account_headers = {
@@ -207,14 +249,27 @@ def collect_newapi(config: LlmUsageConfig) -> LlmUsageResult:
     return normalize_newapi(config, payloads)
 
 
-def _today_timestamp_query(now: datetime | None = None) -> str:
-    current = now or datetime.now().astimezone()
-    start = current.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = current.replace(hour=23, minute=59, second=59, microsecond=0)
+def _today_timestamp_query(now: datetime | None = None, lab_timezone: str = "Asia/Shanghai") -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return _date_timestamp_query(current.astimezone(ZoneInfo(lab_timezone)).date(), lab_timezone)
+
+
+def _date_timestamp_query(usage_date: date, lab_timezone: str) -> str:
+    start = datetime.combine(usage_date, time.min, tzinfo=ZoneInfo(lab_timezone))
+    end = start + timedelta(days=1) - timedelta(seconds=1)
     return f"start_timestamp={int(start.timestamp())}&end_timestamp={int(end.timestamp())}"
 
 
-def _deepseek_platform_range(now: datetime | None = None) -> tuple[int, int]:
+def _deepseek_platform_range(
+    now: datetime | None = None,
+    *,
+    usage_date: date | None = None,
+) -> tuple[int, int]:
+    if usage_date is not None:
+        start = datetime.combine(usage_date, time.min, tzinfo=timezone.utc)
+        return int(start.timestamp()), int((start + timedelta(days=1)).timestamp())
     current = now or datetime.now(timezone.utc)
     end = current.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     start = end - timedelta(days=7)

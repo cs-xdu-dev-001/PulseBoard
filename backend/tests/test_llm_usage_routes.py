@@ -573,6 +573,11 @@ def test_llm_usage_today_uses_local_daily_rows_instead_of_cumulative_snapshot(mo
 
 def test_llm_usage_activity_returns_year_and_filtered_daily_totals(monkeypatch):
     mock_academic_config(monkeypatch)
+    rollup_calls = []
+    monkeypatch.setattr(
+        "app.routes.ensure_daily_rollups",
+        lambda *args, **kwargs: rollup_calls.append((args, kwargs)),
+    )
     client, session_factory = make_client()
     with session_factory() as db:
         source = LlmUsageSource(
@@ -617,6 +622,8 @@ def test_llm_usage_activity_returns_year_and_filtered_daily_totals(monkeypatch):
     assert payload["active_days"] == 2
     assert payload["total_tokens"] == 100
     assert payload["peak_daily_tokens"] == 100
+    assert payload["rollup_status"] == "ready"
+    assert rollup_calls == []
     days = {item["date"]: item for item in payload["days"] if item["has_data"]}
     assert days["2026-07-18"]["token_count"] == 100
     assert days["2026-07-19"]["token_count"] is None

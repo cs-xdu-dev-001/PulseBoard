@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { AriaComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLlmActivity, fetchLlmModels, fetchLlmSeries, fetchLlmSources, fetchLlmSummary, refreshLlmUsage } from '../api.js'
+
+echarts.use([
+  AriaComponent,
+  BarChart,
+  CanvasRenderer,
+  GridComponent,
+  LegendComponent,
+  LineChart,
+  PieChart,
+  TooltipComponent,
+])
 
 const ranges = [
   { value: 'today', label: '今天' },
@@ -10,6 +24,8 @@ const ranges = [
 ]
 
 const modelColors = ['#22c55e', '#f97316', '#38bdf8', '#2563eb', '#8b5cf6', '#f43f5e', '#14b8a6', '#eab308']
+const MAIN_CACHE_TTL_MS = 30_000
+const ACTIVITY_CACHE_TTL_MS = 60_000
 
 export function LlmUsageView({ theme = 'dark' }) {
   const [range, setRange] = useState('today')
@@ -25,84 +41,112 @@ export function LlmUsageView({ theme = 'dark' }) {
   const [granularity, setGranularity] = useState('day')
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const mainCacheRef = useRef(new Map())
   const activityCacheRef = useRef(new Map())
   const activityYear = new Date().getFullYear()
 
-  async function loadMain(nextSource = source, shouldCommit = () => true) {
-    try {
-      const [nextSummary, nextSeries, nextModels] = await Promise.all([
-        fetchLlmSummary(range, nextSource),
-        fetchLlmSeries(range, nextSource),
-        fetchLlmModels(range, nextSource),
-      ])
+  async function loadMain(nextSource = source, { signal, shouldCommit = () => true, force = false } = {}) {
+    const cacheKey = `${range}:${nextSource}`
+    const cached = mainCacheRef.current.get(cacheKey)
+    if (!force && cached?.expiresAt > Date.now()) {
       if (!shouldCommit()) return
-      setSummary(nextSummary)
-      setSeries(nextSeries)
-      setModels(nextModels.models || [])
+      setSummary(cached.summary)
+      setSeries(cached.series)
+      setModels(cached.models)
       setError(null)
-    } catch (err) {
-      if (shouldCommit()) setError(err.message)
-    }
-  }
-
-  async function loadSources(shouldCommit = () => true) {
-    try {
-      const nextSources = await fetchLlmSources()
-      if (!shouldCommit()) return
-      setSources(nextSources.sources || [])
-    } catch (err) {
-      if (shouldCommit()) setError(err.message)
-    }
-  }
-
-  async function loadActivity(nextSource = source, shouldCommit = () => true) {
-    const cacheKey = `${activityYear}:${nextSource}`
-    const cached = activityCacheRef.current.get(cacheKey)
-    if (cached) {
-      setActivity(cached)
       return
     }
     try {
-      const nextActivity = await fetchLlmActivity(activityYear, nextSource)
+      const [nextSummary, nextSeries, nextModels] = await Promise.all([
+        fetchLlmSummary(range, nextSource, { signal }),
+        fetchLlmSeries(range, nextSource, { signal }),
+        fetchLlmModels(range, nextSource, { signal }),
+      ])
       if (!shouldCommit()) return
-      activityCacheRef.current.set(cacheKey, nextActivity)
+      const nextModelItems = nextModels.models || []
+      mainCacheRef.current.set(cacheKey, {
+        summary: nextSummary,
+        series: nextSeries,
+        models: nextModelItems,
+        expiresAt: Date.now() + MAIN_CACHE_TTL_MS,
+      })
+      setSummary(nextSummary)
+      setSeries(nextSeries)
+      setModels(nextModelItems)
+      setError(null)
+    } catch (err) {
+      if (!isAbortError(err) && shouldCommit()) setError(err.message)
+    }
+  }
+
+  async function loadSources({ signal, shouldCommit = () => true } = {}) {
+    try {
+      const nextSources = await fetchLlmSources({ signal })
+      if (!shouldCommit()) return
+      setSources(nextSources.sources || [])
+    } catch (err) {
+      if (!isAbortError(err) && shouldCommit()) setError(err.message)
+    }
+  }
+
+  async function loadActivity(nextSource = source, { signal, shouldCommit = () => true } = {}) {
+    const cacheKey = `${activityYear}:${nextSource}`
+    const cached = activityCacheRef.current.get(cacheKey)
+    if (cached?.expiresAt > Date.now()) {
+      if (!shouldCommit()) return
+      setActivity(cached.data)
+      return
+    }
+    try {
+      const nextActivity = await fetchLlmActivity(activityYear, nextSource, { signal })
+      if (!shouldCommit()) return
+      activityCacheRef.current.set(cacheKey, {
+        data: nextActivity,
+        expiresAt: Date.now() + ACTIVITY_CACHE_TTL_MS,
+      })
       setActivity(nextActivity)
       setError(null)
     } catch (err) {
-      if (shouldCommit()) setError(err.message)
+      if (!isAbortError(err) && shouldCommit()) setError(err.message)
     }
   }
 
   useEffect(() => {
     let active = true
-    loadSources(() => active)
+    const controller = new AbortController()
+    loadSources({ signal: controller.signal, shouldCommit: () => active })
     return () => {
       active = false
+      controller.abort()
     }
   }, [])
 
   useEffect(() => {
     let active = true
     let inFlight = false
+    const controller = new AbortController()
     const run = async () => {
       if (inFlight) return
       inFlight = true
-      await loadMain(source, () => active)
+      await loadMain(source, { signal: controller.signal, shouldCommit: () => active })
       inFlight = false
     }
     run()
     const timer = setInterval(run, 30000)
     return () => {
       active = false
+      controller.abort()
       clearInterval(timer)
     }
   }, [range, source])
 
   useEffect(() => {
     let active = true
-    loadActivity(source, () => active)
+    const controller = new AbortController()
+    loadActivity(source, { signal: controller.signal, shouldCommit: () => active })
     return () => {
       active = false
+      controller.abort()
     }
   }, [source])
 
@@ -114,8 +158,9 @@ export function LlmUsageView({ theme = 'dark' }) {
     setRefreshing(true)
     try {
       await refreshLlmUsage()
+      mainCacheRef.current.delete(`${range}:${source}`)
       activityCacheRef.current.delete(`${activityYear}:${source}`)
-      await Promise.all([loadSources(), loadMain(source), loadActivity(source)])
+      await Promise.all([loadSources(), loadMain(source, { force: true }), loadActivity(source)])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1086,4 +1131,8 @@ function formatActivityTokens(value) {
 function formatTime(value) {
   if (!value) return '--'
   return new Date(value).toLocaleString()
+}
+
+function isAbortError(error) {
+  return error?.name === 'AbortError'
 }

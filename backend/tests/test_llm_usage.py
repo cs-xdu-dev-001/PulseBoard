@@ -1,3 +1,4 @@
+from datetime import date
 from threading import Barrier, BrokenBarrierError, Thread
 
 import httpx
@@ -17,8 +18,20 @@ from app.llm_usage import (
     save_llm_usage_config,
     update_llm_provider_config,
 )
-from app.llm_usage_collector import check_model_connection, collect_deepseek_platform, collect_newapi, collect_source
+from app.llm_usage_collector import (
+    _date_timestamp_query,
+    check_model_connection,
+    collect_deepseek_platform,
+    collect_newapi,
+    collect_source,
+)
 from app.llm_pricing import estimate_model_cost_usd
+
+
+def test_date_timestamp_query_uses_configured_timezone():
+    assert _date_timestamp_query(date(2026, 7, 22), "Asia/Shanghai") == (
+        "start_timestamp=1784649600&end_timestamp=1784735999"
+    )
 
 
 def test_load_llm_usage_configs_supports_custom_source_ids(tmp_path):
@@ -233,11 +246,14 @@ def test_collect_deepseek_platform_calls_official_usage_endpoints(monkeypatch):
             "deepseek_platform",
             api_key="sk-main",
             access_token="platform-token",
-        )
+        ),
+        usage_date=date(2026, 7, 22),
     )
 
     assert any("/api/v0/usage/by_api_key/amount" in url for url, _headers in requested)
     assert any("/api/v0/usage/by_api_key/cost" in url for url, _headers in requested)
+    assert all("start=1784678400" in url for url, _headers in requested[:2])
+    assert all("end=1784764800" in url for url, _headers in requested[:2])
     assert requested[0][1]["Authorization"] == "Bearer platform-token"
     assert requested[0][1]["x-client-platform"] == "web"
     assert result.status == "online"
@@ -451,6 +467,57 @@ def test_collect_newapi_uses_user_scoped_log_endpoints(monkeypatch):
     assert result.request_count == 1
     assert result.token_count == 1883
     assert result.estimated_amount == 0.041336
+
+
+def test_collect_newapi_uses_explicit_usage_date(monkeypatch):
+    requested_urls = []
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "/api/user/self" in self.url:
+                return {"success": True, "data": {"quota": 1_000_000}}
+            if "/stat?" in self.url:
+                return {"success": True, "data": {"count": 1, "token": 10, "quota": 500}}
+            return {"success": True, "data": {"items": [], "total": 0}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            requested_urls.append(url)
+            return FakeResponse(url)
+
+    monkeypatch.setattr("app.llm_usage_collector.httpx.Client", FakeClient)
+
+    collect_newapi(
+        LlmUsageConfig(
+            "academic-main",
+            "Codex",
+            "newapi_admin",
+            base_url="https://example",
+            access_token="account-token",
+        ),
+        usage_date=date(2026, 7, 22),
+        lab_timezone="Asia/Shanghai",
+    )
+
+    usage_urls = [url for url in requested_urls if "/api/log/" in url]
+    assert usage_urls
+    assert all("start_timestamp=1784649600" in url for url in usage_urls)
+    assert all("end_timestamp=1784735999" in url for url in usage_urls)
 
 
 def test_collect_newapi_uses_user_token_search_when_access_token_is_configured(monkeypatch):

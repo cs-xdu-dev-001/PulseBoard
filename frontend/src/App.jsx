@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { fetchCurrentDashboard, fetchGpuHistory, fetchMachineHistory, fetchVpsHistory } from './api.js'
 import { GpuCard } from './components/GpuCard.jsx'
 import { MachineCard } from './components/MachineCard.jsx'
 import { VpsCard } from './components/VpsCard.jsx'
-import { HistoryChart } from './components/HistoryChart.jsx'
-import { LlmUsageView } from './components/LlmUsageView.jsx'
-import { SettingsView } from './components/SettingsView.jsx'
+
+const HistoryChart = lazy(() => import('./components/HistoryChart.jsx').then((module) => ({ default: module.HistoryChart })))
+const LlmUsageView = lazy(() => import('./components/LlmUsageView.jsx').then((module) => ({ default: module.LlmUsageView })))
+const SettingsView = lazy(() => import('./components/SettingsView.jsx').then((module) => ({ default: module.SettingsView })))
 
 const refreshMs = 15000
 const historyRefreshMs = 30000
@@ -132,9 +133,13 @@ export default function App() {
       {error && <section className="notice danger">API 请求失败：{error}</section>}
 
       {activeTab === 'llm' ? (
-        <LlmUsageView theme={theme} />
+        <Suspense fallback={<div className="page-loading" aria-label="页面加载中" />}>
+          <LlmUsageView theme={theme} />
+        </Suspense>
       ) : activeTab === 'settings' ? (
-        <SettingsView />
+        <Suspense fallback={<div className="page-loading" aria-label="页面加载中" />}>
+          <SettingsView />
+        </Suspense>
       ) : (
         <InfraView
           dashboard={dashboard}
@@ -313,7 +318,11 @@ function HistorySection({ range, setRange, children }) {
           <button className={range === '24h' ? 'active' : ''} onClick={() => setRange('24h')}>24h</button>
         </div>
       </div>
-      <div className="chart-grid">{children}</div>
+      <div className="chart-grid">
+        <Suspense fallback={<div className="page-loading" aria-label="历史曲线加载中" />}>
+          {children}
+        </Suspense>
+      </div>
     </section>
   )
 }

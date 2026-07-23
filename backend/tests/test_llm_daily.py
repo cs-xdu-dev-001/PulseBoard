@@ -6,9 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import llm_usage_collector
+from app import main as app_main
 from app.db import Base
 from app.llm_daily import rebuild_daily_rollups, upsert_daily_from_result
-from app.llm_usage import LlmUsageResult
+from app.llm_usage import LlmUsageConfig, LlmUsageResult
 from app.models import LlmUsageDaily, LlmUsageSnapshot, LlmUsageSource
 
 
@@ -137,6 +139,116 @@ def test_rebuild_daily_rollups_uses_latest_newapi_snapshot():
     assert len([row for row in rows if row.model == "__total__"]) == 1
 
 
+def test_daily_upsert_does_not_replace_complete_total_with_sampled_result():
+    Session = make_session()
+    usage_date = date(2026, 7, 22)
+    complete_at = datetime(2026, 7, 22, 14, tzinfo=timezone.utc)
+    sampled_at = datetime(2026, 7, 22, 15, tzinfo=timezone.utc)
+    with Session() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="EduModel",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            LlmUsageDaily(
+                source_id=source.id,
+                usage_date=usage_date,
+                model="__total__",
+                request_count=200,
+                token_count=20_000,
+                token_complete=True,
+                data_quality="complete",
+                observed_at=complete_at,
+            )
+        )
+        db.commit()
+        sampled = LlmUsageResult(
+            source_id="academic",
+            display_name="EduModel",
+            source_type="newapi_admin",
+            status="online",
+            request_count=50,
+            token_count=5_000,
+            model_stats=[],
+            raw_summary={
+                "newapi": {
+                    "buckets": [
+                        {
+                            "timestamp": "2026-07-22T08:00:00+08:00",
+                            "model": "gpt-5.5",
+                            "request_count": 50,
+                            "input_tokens": 4_000,
+                            "output_tokens": 1_000,
+                        }
+                    ]
+                }
+            },
+        )
+
+        upsert_daily_from_result(
+            db,
+            sampled,
+            sampled_at,
+            "Asia/Shanghai",
+            source_db_id=source.id,
+            replace=True,
+        )
+        db.commit()
+        total = db.query(LlmUsageDaily).filter(LlmUsageDaily.model == "__total__").one()
+
+    assert total.request_count == 200
+    assert total.token_count == 20_000
+    assert total.token_complete is True
+    assert total.data_quality == "complete"
+    assert total.observed_at.replace(tzinfo=timezone.utc) == complete_at
+
+
+def test_daily_upsert_writes_newapi_result_to_explicit_target_date():
+    Session = make_session()
+    collected_at = datetime(2026, 7, 23, 1, tzinfo=timezone.utc)
+    target_date = date(2026, 7, 22)
+    with Session() as db:
+        source = LlmUsageSource(
+            source_id="academic",
+            display_name="EduModel",
+            source_type="newapi_admin",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        result = LlmUsageResult(
+            source_id="academic",
+            display_name="EduModel",
+            source_type="newapi_admin",
+            status="online",
+            request_count=120,
+            token_count=12_000,
+            quota_used=250_000,
+            estimated_amount=0.5,
+            model_stats=[],
+            raw_summary={"stat": {"count": 120, "token": 12_000, "quota": 250_000}},
+        )
+
+        upsert_daily_from_result(
+            db,
+            result,
+            collected_at,
+            "Asia/Shanghai",
+            source_db_id=source.id,
+            target_date=target_date,
+        )
+        db.commit()
+        total = db.query(LlmUsageDaily).one()
+
+    assert total.usage_date == target_date
+    assert total.token_count == 12_000
+    assert total.observed_at.replace(tzinfo=timezone.utc) == collected_at
+
+
 def test_rebuild_daily_rollups_reads_deepseek_daily_buckets():
     Session = make_session()
     observed_at = datetime(2026, 7, 21, 8, tzinfo=timezone.utc)
@@ -178,6 +290,148 @@ def test_rebuild_daily_rollups_reads_deepseek_daily_buckets():
     assert {row.usage_date.isoformat() for row in rows} == {"2026-07-20", "2026-07-21"}
     assert sum(row.token_count for row in rows) == 1_500
     assert all(row.currency == "CNY" for row in rows)
+
+
+def test_daily_upsert_filters_deepseek_buckets_to_target_date():
+    Session = make_session()
+    collected_at = datetime(2026, 7, 23, 1, tzinfo=timezone.utc)
+    target_date = date(2026, 7, 22)
+    with Session() as db:
+        source = LlmUsageSource(
+            source_id="deepseek-main",
+            display_name="DeepSeek",
+            source_type="deepseek_platform",
+            status="online",
+        )
+        db.add(source)
+        db.flush()
+        result = LlmUsageResult(
+            source_id="deepseek-main",
+            display_name="DeepSeek",
+            source_type="deepseek_platform",
+            status="online",
+            raw_summary={
+                "deepseek_platform": {
+                    "currency": "CNY",
+                    "daily": [
+                        {"time": "2026-07-21T00:00:00+00:00", "request_count": 10, "token_count": 1_000},
+                        {"time": "2026-07-22T00:00:00+00:00", "request_count": 20, "token_count": 2_000},
+                    ],
+                }
+            },
+        )
+
+        upsert_daily_from_result(
+            db,
+            result,
+            collected_at,
+            "Asia/Shanghai",
+            source_db_id=source.id,
+            target_date=target_date,
+        )
+        db.commit()
+        rows = db.query(LlmUsageDaily).all()
+
+    assert len(rows) == 1
+    assert rows[0].usage_date == target_date
+    assert rows[0].token_count == 2_000
+
+
+def test_daily_collection_only_persists_official_usage_sources(monkeypatch):
+    Session = make_session()
+    target_date = date(2026, 7, 22)
+    configs = [
+        LlmUsageConfig("academic", "EduModel", "newapi_admin"),
+        LlmUsageConfig("deepseek-main", "DeepSeek", "deepseek_platform"),
+        LlmUsageConfig("deepseek-balance", "DeepSeek余额", "deepseek_balance"),
+        LlmUsageConfig("gateway-main", "Gateway", "openai_gateway"),
+    ]
+    collected = []
+
+    def fake_collect_source(config, *, usage_date=None, lab_timezone="Asia/Shanghai"):
+        collected.append((config.source_id, usage_date, lab_timezone))
+        if config.source_type == "newapi_admin":
+            return LlmUsageResult(
+                source_id=config.source_id,
+                display_name=config.display_name,
+                source_type=config.source_type,
+                status="online",
+                request_count=12,
+                token_count=1_200,
+                raw_summary={"stat": {"count": 12, "token": 1_200}},
+            )
+        return LlmUsageResult(
+            source_id=config.source_id,
+            display_name=config.display_name,
+            source_type=config.source_type,
+            status="online",
+            raw_summary={
+                "deepseek_platform": {
+                    "currency": "CNY",
+                    "daily": [
+                        {
+                            "time": "2026-07-22T00:00:00+00:00",
+                            "request_count": 8,
+                            "token_count": 800,
+                            "amount": 0.8,
+                        }
+                    ],
+                }
+            },
+        )
+
+    monkeypatch.setattr(llm_usage_collector, "load_llm_usage_configs", lambda settings: configs)
+    monkeypatch.setattr(llm_usage_collector, "collect_source", fake_collect_source)
+    settings = type("SettingsStub", (), {"lab_timezone": "Asia/Shanghai"})()
+
+    with Session() as db:
+        llm_usage_collector.collect_llm_usage_daily_once(db, settings, target_date)
+        rows = db.query(LlmUsageDaily).order_by(LlmUsageDaily.source_id).all()
+
+    assert [item[0] for item in collected] == ["academic", "deepseek-main"]
+    assert all(item[1] == target_date for item in collected)
+    assert len(rows) == 2
+    assert {row.usage_date for row in rows} == {target_date}
+    assert sum(row.token_count for row in rows) == 2_000
+
+
+def test_daily_collection_job_uses_previous_configured_local_date(monkeypatch):
+    captured = {}
+    settings = type(
+        "SettingsStub",
+        (),
+        {
+            "lab_timezone": "Asia/Shanghai",
+            "llm_usage_sources": "academic",
+        },
+    )()
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(app_main, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_main, "SessionLocal", FakeSession)
+    monkeypatch.setattr(
+        app_main,
+        "collect_llm_usage_daily_once",
+        lambda db, current_settings, target_date: captured.update(
+            db=db,
+            settings=current_settings,
+            target_date=target_date,
+        ),
+        raising=False,
+    )
+
+    app_main.run_llm_usage_daily_collection_job(
+        now=datetime(2026, 7, 22, 16, 5, tzinfo=timezone.utc)
+    )
+
+    assert captured["target_date"] == date(2026, 7, 22)
+    assert captured["settings"] is settings
 
 
 def test_rebuild_daily_rollups_reads_deepseek_daily_model_buckets():

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
@@ -9,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.collector import collect_once
 from app.config import get_settings
 from app.db import SessionLocal
-from app.llm_usage_collector import collect_llm_usage_once
+from app.llm_usage_collector import collect_llm_usage_daily_once, collect_llm_usage_once
 from app.node_collector import collect_nodes_once
 from app.routes import router
 
@@ -34,6 +36,18 @@ def run_llm_usage_collection_job() -> None:
         return
     with SessionLocal() as db:
         collect_llm_usage_once(db, settings)
+
+
+def run_llm_usage_daily_collection_job(now: datetime | None = None) -> None:
+    settings = get_settings()
+    if not settings.llm_usage_sources.strip():
+        return
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    target_date = current.astimezone(ZoneInfo(settings.lab_timezone)).date() - timedelta(days=1)
+    with SessionLocal() as db:
+        collect_llm_usage_daily_once(db, settings, target_date)
 
 
 @asynccontextmanager
@@ -65,6 +79,14 @@ async def lifespan(app: FastAPI):
                 "interval",
                 seconds=settings.llm_usage_interval_seconds,
                 id="llm-usage-collector",
+                max_instances=1,
+                coalesce=True,
+            )
+            scheduler.add_job(
+                run_llm_usage_daily_collection_job,
+                "cron",
+                minute=15,
+                id="llm-usage-daily-finalizer",
                 max_instances=1,
                 coalesce=True,
             )

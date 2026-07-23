@@ -45,6 +45,22 @@ describe('API错误详情', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/llm/usage/activity?year=2026&source=provider%3Aacademic')
   })
 
+  it('LLM查询把AbortSignal传给fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ days: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    await fetchLlmActivity(2026, 'provider:academic', { signal: controller.signal })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/llm/usage/activity?year=2026&source=provider%3Aacademic',
+      { signal: controller.signal },
+    )
+  })
+
   it('删除Key失败时复用FastAPI detail', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ detail: 'source_id deepseek-main does not exist' }),

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import * as echarts from 'echarts'
+import * as echartsCore from 'echarts/core'
 
 import {
   fetchLlmActivity,
@@ -11,7 +11,7 @@ import {
 } from '../api.js'
 import { LlmUsageView } from './LlmUsageView.jsx'
 
-vi.mock('echarts', () => ({
+vi.mock('echarts/core', () => ({
   init: vi.fn(() => ({
     dispose: vi.fn(),
     resize: vi.fn(),
@@ -24,6 +24,24 @@ vi.mock('echarts', () => ({
       }
     },
   },
+  use: vi.fn(),
+}))
+
+vi.mock('echarts/charts', () => ({
+  BarChart: {},
+  LineChart: {},
+  PieChart: {},
+}))
+
+vi.mock('echarts/components', () => ({
+  AriaComponent: {},
+  GridComponent: {},
+  LegendComponent: {},
+  TooltipComponent: {},
+}))
+
+vi.mock('echarts/renderers', () => ({
+  CanvasRenderer: {},
 }))
 
 vi.mock('../api.js', () => ({
@@ -48,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 it('LLM看板只保留监控操作，不再提供API Key配置', async () => {
@@ -63,14 +82,21 @@ it('LLM看板只保留监控操作，不再提供API Key配置', async () => {
   expect(screen.queryByText('API Key')).not.toBeInTheDocument()
 })
 
+it('图表通过ECharts core按需初始化', async () => {
+  render(<LlmUsageView />)
+
+  await screen.findByRole('button', { name: '手动刷新' })
+  expect(echartsCore.init).toHaveBeenCalled()
+})
+
 it('LLM看板支持New API风格范围切换并请求对应数据', async () => {
   render(<LlmUsageView />)
 
   fireEvent.click(await screen.findByRole('button', { name: '29天' }))
 
-  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('29d', ''))
-  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '')
-  expect(fetchLlmModels).toHaveBeenLastCalledWith('29d', '')
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('29d', '', expect.any(Object)))
+  expect(fetchLlmSeries).toHaveBeenCalledWith('29d', '', expect.any(Object))
+  expect(fetchLlmModels).toHaveBeenLastCalledWith('29d', '', expect.any(Object))
 })
 
 it('月度活动独立拉取全年每日数据，不受顶部今天范围限制', async () => {
@@ -90,8 +116,8 @@ it('月度活动独立拉取全年每日数据，不受顶部今天范围限制'
 
   render(<LlmUsageView />)
 
-  await waitFor(() => expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), ''))
-  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '')
+  await waitFor(() => expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), '', expect.any(Object)))
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '', expect.any(Object))
   expect(screen.getByTitle(new RegExp(`${localDateKey(yesterday)}：Token：3.10K，31次请求`))).toBeVisible()
 })
 
@@ -117,7 +143,7 @@ it('自动轮询不重复拉取全年活动数据', async () => {
   await act(async () => {
     await Promise.resolve()
   })
-  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), '')
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), '', expect.any(Object))
   fetchLlmActivity.mockClear()
   fetchLlmSeries.mockClear()
 
@@ -126,7 +152,7 @@ it('自动轮询不重复拉取全年活动数据', async () => {
     await Promise.resolve()
   })
 
-  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '')
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', '', expect.any(Object))
   expect(fetchLlmActivity).not.toHaveBeenCalled()
 })
 
@@ -413,19 +439,122 @@ it('来源筛选支持按供应商汇总和按单个令牌查看', async () => {
   expect(within(filter).getByRole('option', { name: '主Key' })).toBeVisible()
 
   fireEvent.change(filter, { target: { value: 'provider:academic' } })
-  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'provider:academic'))
-  expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'provider:academic')
-  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'provider:academic')
-  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'provider:academic')
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'provider:academic', expect.any(Object)))
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'provider:academic', expect.any(Object))
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'provider:academic', expect.any(Object))
+  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'provider:academic', expect.any(Object))
 
   fireEvent.change(filter, { target: { value: 'source:academic-main' } })
-  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'source:academic-main'))
-  expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'source:academic-main')
-  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'source:academic-main')
-  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'source:academic-main')
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenLastCalledWith('today', 'source:academic-main', expect.any(Object)))
+  expect(fetchLlmSeries).toHaveBeenCalledWith('today', 'source:academic-main', expect.any(Object))
+  expect(fetchLlmActivity).toHaveBeenCalledWith(new Date().getFullYear(), 'source:academic-main', expect.any(Object))
+  expect(fetchLlmModels).toHaveBeenLastCalledWith('today', 'source:academic-main', expect.any(Object))
+})
+
+it('切换来源时取消旧筛选的主数据请求', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '主Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+      },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  const filter = await screen.findByLabelText('来源')
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenCalledWith('today', '', expect.any(Object)))
+  const initialSignal = fetchLlmSummary.mock.calls.find(([nextRange, nextSource]) => (
+    nextRange === 'today' && nextSource === ''
+  ))[2].signal
+
+  fireEvent.change(filter, { target: { value: 'provider:academic' } })
+
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenCalledWith(
+    'today',
+    'provider:academic',
+    expect.any(Object),
+  ))
+  expect(initialSignal.aborted).toBe(true)
+})
+
+it('切回刚访问的来源时复用短期主数据缓存', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '主Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+      },
+    ],
+  })
+
+  render(<LlmUsageView />)
+
+  const filter = await screen.findByLabelText('来源')
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenCalled())
+  fireEvent.change(filter, { target: { value: 'provider:academic' } })
+  await waitFor(() => expect(fetchLlmSummary).toHaveBeenCalledWith(
+    'today',
+    'provider:academic',
+    expect.any(Object),
+  ))
+
+  fireEvent.change(filter, { target: { value: '' } })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const defaultCalls = fetchLlmSummary.mock.calls.filter(([nextRange, nextSource]) => (
+    nextRange === 'today' && nextSource === ''
+  ))
+  expect(defaultCalls).toHaveLength(1)
+})
+
+it('全年活动缓存超过60秒后重新请求', async () => {
+  fetchLlmSources.mockResolvedValue({
+    sources: [
+      {
+        source_id: 'academic-main',
+        provider_id: 'academic',
+        provider_name: 'EduModel',
+        display_name: '主Key',
+        source_type: 'newapi_admin',
+        status: 'online',
+      },
+    ],
+  })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+
+  render(<LlmUsageView />)
+
+  const filter = await screen.findByLabelText('来源')
+  await waitFor(() => expect(fetchLlmActivity).toHaveBeenCalled())
+  fireEvent.change(filter, { target: { value: 'provider:academic' } })
+  await waitFor(() => expect(fetchLlmActivity).toHaveBeenCalledWith(
+    new Date().getFullYear(),
+    'provider:academic',
+    expect.any(Object),
+  ))
+
+  now.mockReturnValue(61_001)
+  fireEvent.change(filter, { target: { value: '' } })
+  await waitFor(() => {
+    const defaultCalls = fetchLlmActivity.mock.calls.filter(([_year, nextSource]) => nextSource === '')
+    expect(defaultCalls).toHaveLength(2)
+  })
 })
 
 it('LLM看板按New API风格展示活动热力图和模型分析视图', async () => {
+  const todayKey = localDateKey(new Date())
   const todayMorning = new Date()
   todayMorning.setHours(9, 0, 0, 0)
   const todayNoon = new Date()
@@ -475,7 +604,7 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
   fetchLlmActivity.mockResolvedValue({
     days: [
       { date: '2026-01-01', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
-      { date: '2026-07-21', request_count: 200, token_count: 13_345_678, has_data: true, token_complete: true, data_quality: 'complete' },
+      { date: todayKey, request_count: 200, token_count: 13_345_678, has_data: true, token_complete: true, data_quality: 'complete' },
       { date: '2026-12-31', request_count: 0, token_count: 0, has_data: true, token_complete: true, data_quality: 'complete' },
     ],
     active_days: 3,
@@ -498,7 +627,7 @@ it('LLM看板按New API风格展示活动热力图和模型分析视图', async 
   expect(screen.getByTitle(/2026-12-31：Token：0.00，0次请求/)).toBeVisible()
   expect(screen.getByTitle(/2026-01-01：Token：0.00，0次请求/)).toHaveClass('row-0')
   expect(screen.getByTitle(/2026-01-02：Token：不可用，0次请求/)).toHaveClass('row-1')
-  expect(screen.getByTitle(/2026-07-21：Token：13.35M，200次请求/)).toHaveClass('today')
+  expect(screen.getByTitle(new RegExp(`${todayKey}：Token：13.35M，200次请求`))).toHaveClass('today')
   expect(screen.getByLabelText('月度活动，横向滚动').scrollTo).toHaveBeenCalledWith({ left: expect.any(Number), behavior: 'auto' })
 })
 
@@ -589,8 +718,8 @@ it('消耗和趋势图不启用横坐标缩放', async () => {
 
   render(<LlmUsageView />)
 
-  await waitFor(() => expect(echarts.init).toHaveBeenCalled())
-  const options = echarts.init.mock.results
+  await waitFor(() => expect(echartsCore.init).toHaveBeenCalled())
+  const options = echartsCore.init.mock.results
     .map((item) => item.value.setOption.mock.calls.at(-1)?.[0])
     .filter(Boolean)
   expect(options.some((option) => option.dataZoom)).toBe(false)
@@ -622,9 +751,9 @@ it('消耗和趋势图使用固定日期分类轴，避免单点数据自动扩�
   render(<LlmUsageView />)
 
   fireEvent.click(await screen.findByRole('button', { name: '7天' }))
-  await waitFor(() => expect(fetchLlmSeries).toHaveBeenCalledWith('7d', ''))
-  await waitFor(() => expect(echarts.init).toHaveBeenCalled())
-  const options = echarts.init.mock.results
+  await waitFor(() => expect(fetchLlmSeries).toHaveBeenCalledWith('7d', '', expect.any(Object)))
+  await waitFor(() => expect(echartsCore.init).toHaveBeenCalled())
+  const options = echartsCore.init.mock.results
     .map((item) => item.value.setOption.mock.calls.at(-1)?.[0])
     .filter(Boolean)
   const costOption = options.filter((option) => option.series?.some((item) => item.name === 'gpt-5.5')).at(-1)

@@ -23,6 +23,7 @@ def upsert_daily_from_result(
     *,
     source_db_id: int | None = None,
     replace: bool = True,
+    target_date: date | None = None,
 ) -> None:
     source_id = source_db_id
     if source_id is None:
@@ -41,6 +42,7 @@ def upsert_daily_from_result(
         model_stats=result.model_stats or [],
         raw_summary=result.raw_summary or {},
         lab_timezone=lab_timezone,
+        target_date=target_date,
     )
     for value in values:
         _upsert_value(db, value, replace=replace)
@@ -175,9 +177,19 @@ def _values_from_observation(
     model_stats: list[dict[str, Any]],
     raw_summary: dict[str, Any],
     lab_timezone: str,
+    target_date: date | None = None,
 ) -> list[dict[str, Any]]:
     if source_type == "deepseek_platform":
-        return _deepseek_values(source_id, collected_at, raw_summary, lab_timezone, request_count, token_count, estimated_amount)
+        return _deepseek_values(
+            source_id,
+            collected_at,
+            raw_summary,
+            lab_timezone,
+            request_count,
+            token_count,
+            estimated_amount,
+            target_date,
+        )
     if source_type == "newapi_admin":
         return _newapi_values(
             source_id,
@@ -189,6 +201,7 @@ def _values_from_observation(
             quota_used,
             estimated_amount,
             model_stats,
+            target_date,
         )
     if source_type == "openai_gateway":
         return _gateway_values(source_id, collected_at, model_stats, request_count, token_count, estimated_amount, lab_timezone)
@@ -205,8 +218,9 @@ def _newapi_values(
     quota_used: float | None,
     estimated_amount: float | None,
     model_stats: list[dict[str, Any]],
+    target_date: date | None = None,
 ) -> list[dict[str, Any]]:
-    usage_date = _local_date(collected_at, _zone(lab_timezone))
+    usage_date = target_date or _local_date(collected_at, _zone(lab_timezone))
     stat = raw_summary.get("stat") if isinstance(raw_summary.get("stat"), dict) else {}
     stat_has_count = _first_number(stat, ("count", "request_count", "total_count")) is not None
     stat_has_tokens = _first_number(stat, ("token", "tokens", "token_count", "total_tokens")) is not None
@@ -245,6 +259,8 @@ def _newapi_values(
     for bucket in trusted_buckets:
         model = str(bucket.get("model") or "unknown")
         bucket_date = _local_date(bucket.get("timestamp") or collected_at, _zone(lab_timezone))
+        if target_date is not None and bucket_date != target_date:
+            continue
         key = (bucket_date, model)
         item = model_values.setdefault(
             key,
@@ -307,6 +323,7 @@ def _deepseek_values(
     request_count: float | None,
     token_count: float | None,
     estimated_amount: float | None,
+    target_date: date | None = None,
 ) -> list[dict[str, Any]]:
     platform = raw_summary.get("deepseek_platform") if isinstance(raw_summary.get("deepseek_platform"), dict) else {}
     currency = str(platform.get("currency") or "CNY")
@@ -316,6 +333,8 @@ def _deepseek_values(
         if not isinstance(item, dict):
             continue
         usage_date = _local_date(item.get("time") or collected_at, _zone(lab_timezone))
+        if target_date is not None and usage_date != target_date:
+            continue
         values.append(
             _value(
                 source_id=source_id,
@@ -359,7 +378,7 @@ def _deepseek_values(
     return [
         _value(
             source_id=source_id,
-            usage_date=_local_date(collected_at, _zone(lab_timezone)),
+            usage_date=target_date or _local_date(collected_at, _zone(lab_timezone)),
             model=TOTAL_MODEL,
             request_count=request_count,
             token_count=token_count,
@@ -456,6 +475,8 @@ def _upsert_value(db: Session, value: dict[str, Any], *, replace: bool) -> None:
         db.flush()
         return
     if replace:
+        if _quality_rank(value["data_quality"]) < _quality_rank(row.data_quality):
+            return
         for key, item in value.items():
             if key != "source_id":
                 setattr(row, key, item)
@@ -538,3 +559,7 @@ def _local_date(value: Any, zone: ZoneInfo) -> date:
 def _worst_quality(left: str, right: str) -> str:
     order = {"complete": 0, "sampled": 1, "unavailable": 2}
     return left if order.get(left, 2) >= order.get(right, 2) else right
+
+
+def _quality_rank(value: str) -> int:
+    return {"unavailable": 0, "sampled": 1, "complete": 2}.get(value, 0)

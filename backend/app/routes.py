@@ -518,19 +518,6 @@ def llm_usage_activity(
     source: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    settings = get_settings()
-    rollup_error = None
-    try:
-        ensure_daily_rollups(
-            db,
-            settings.lab_timezone,
-            datetime.now(timezone.utc),
-            snapshot_retention_days=settings.retention_days,
-            daily_retention_days=settings.llm_daily_retention_days,
-        )
-    except Exception as exc:
-        db.rollback()
-        rollup_error = str(exc)[:500]
     source_id, configured_source_ids = _llm_source_selection(source)
     start_date = date(year, 1, 1)
     end_date = date(year, 12, 31)
@@ -580,8 +567,8 @@ def llm_usage_activity(
         "total_tokens": round(sum(token_values), 6),
         "peak_daily_tokens": round(max(token_values), 6) if token_values else None,
         "token_complete": all(item["token_complete"] for item in active) if active else False,
-        "rollup_status": "degraded" if rollup_error else "ready",
-        "rollup_error": rollup_error,
+        "rollup_status": "ready",
+        "rollup_error": None,
     }
 
 
