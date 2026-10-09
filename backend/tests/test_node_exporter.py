@@ -1,9 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from app.node_collector import traffic_period_key
 from app.node_collector import _interfaces_with_rates
 from app.node_exporter import (
     calculate_traffic_quota,
+    cpu_totals_from_text,
     normalize_node_metrics,
     parse_bandwidth,
     parse_node_exporters,
@@ -145,3 +148,146 @@ def test_interfaces_with_rates_ignores_internal_cpu_totals():
     assert result["eth0"]["rx_bytes_per_sec"] == 100
     assert result["eth0"]["tx_bytes_per_sec"] == 66.67
     assert "rx_bytes_per_sec" not in result["_cpu_totals"]
+
+
+WINDOWS_TEXT = """
+windows_cpu_time_total{core="0,0",mode="idle"} 100
+windows_cpu_time_total{core="0,0",mode="user"} 40
+windows_cpu_time_total{core="0,0",mode="privileged"} 10
+windows_cpu_time_total{core="0,0",mode="dpc"} 2
+windows_cpu_time_total{core="0,0",mode="interrupt"} 1
+windows_cpu_time_total{core="0,1",mode="idle"} 200
+windows_cpu_time_total{core="0,1",mode="user"} 70
+windows_cpu_time_total{core="0,1",mode="privileged"} 30
+windows_cpu_time_total{core="0,1",mode="dpc"} 2
+windows_cpu_time_total{core="0,1",mode="interrupt"} 1
+windows_memory_physical_total_bytes 1000
+windows_memory_available_bytes 250
+windows_logical_disk_info{volume="C:",filesystem="NTFS"} 1
+windows_logical_disk_size_bytes{volume="C:"} 1000
+windows_logical_disk_free_bytes{volume="C:"} 200
+windows_logical_disk_size_bytes{volume="D:"} 2000
+windows_logical_disk_free_bytes{volume="D:"} 1500
+windows_logical_disk_size_bytes{volume="HarddiskVolume1"} 1000
+windows_logical_disk_free_bytes{volume="HarddiskVolume1"} 10
+windows_logical_disk_size_bytes{volume="_Total"} 4000
+windows_logical_disk_free_bytes{volume="_Total"} 1710
+windows_logical_disk_size_bytes{volume="E:"} 0
+windows_logical_disk_free_bytes{volume="E:"} 0
+windows_logical_disk_size_bytes{volume="F:"} 1000
+windows_net_bytes_received_total{nic="Ethernet 2"} 10000
+windows_net_bytes_sent_total{nic="Ethernet 2"} 5000
+windows_net_bytes_received_total{nic="ZeroTier One"} 300
+windows_net_bytes_sent_total{nic="ZeroTier One"} 200
+windows_net_bytes_received_total{nic="Loopback Pseudo-Interface 1"} 100000
+windows_net_bytes_sent_total{nic="Loopback Pseudo-Interface 1"} 100000
+windows_net_bytes_received_total{nic="_Total"} 110300
+windows_net_bytes_sent_total{nic="_Total"} 105200
+windows_system_boot_time_timestamp 1000
+"""
+
+
+def test_windows_metrics_normalize_memory_disks_network_and_uptime():
+    metrics = normalize_node_metrics(
+        "host-monitor", "http://windows:9182/metrics", WINDOWS_TEXT, None,
+        collected_at=datetime.fromtimestamp(87400, tz=timezone.utc),
+    )
+
+    assert metrics.memory_total_bytes == 1000
+    assert metrics.memory_available_bytes == 250
+    assert metrics.memory_percent == 75
+    assert set(metrics.disks) == {"C:", "D:"}
+    assert metrics.disks["C:"] == {
+        "fstype": "NTFS", "device": "C:", "total_bytes": 1000,
+        "available_bytes": 200, "used_bytes": 800, "percentage": 80,
+    }
+    assert metrics.disks["D:"]["percentage"] == 25
+    assert set(metrics.network_interfaces) == {"Ethernet 2", "ZeroTier One", "_cpu_totals"}
+    assert metrics.total_network_bytes == 15500
+    assert metrics.uptime_seconds == 86400
+    assert metrics.cpu_percent is None  # Rates require two samples.
+    assert metrics.network_rx_bytes_per_sec is None
+    assert metrics.load1 is None and metrics.load5 is None and metrics.load15 is None
+    assert metrics.status == "online"
+
+
+def test_windows_rates_use_two_samples_without_double_counting_cpu_modes():
+    now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    first = normalize_node_metrics("windows", "http://windows:9182", WINDOWS_TEXT, None, collected_at=now)
+    previous = {
+        "collected_at": now, "network_interfaces": first.network_interfaces,
+        "cpu_totals": first.network_interfaces["_cpu_totals"],
+    }
+    second_text = WINDOWS_TEXT.replace('mode="idle"} 100', 'mode="idle"} 130').replace(
+        'mode="user"} 40', 'mode="user"} 60'
+    ).replace('mode="privileged"} 10', 'mode="privileged"} 20').replace(
+        'mode="idle"} 200', 'mode="idle"} 240'
+    ).replace('mode="user"} 70', 'mode="user"} 80').replace(
+        'mode="privileged"} 30', 'mode="privileged"} 40'
+    ).replace('mode="dpc"} 2', 'mode="dpc"} 4').replace(
+        'mode="interrupt"} 1', 'mode="interrupt"} 3'
+    ).replace('nic="Ethernet 2"} 10000', 'nic="Ethernet 2"} 16000').replace(
+        'nic="Ethernet 2"} 5000', 'nic="Ethernet 2"} 9000'
+    )
+    second = normalize_node_metrics(
+        "windows", "http://windows:9182", second_text, previous, collected_at=now + timedelta(seconds=60),
+    )
+
+    assert cpu_totals_from_text(WINDOWS_TEXT) == {"total": 450, "busy": 150}
+    assert second.cpu_percent == 41.67  # 50 busy seconds out of 120 across two cores.
+    assert second.network_rx_bytes_per_sec == 100
+    assert second.network_tx_bytes_per_sec == 66.67
+    interfaces = _interfaces_with_rates(second.network_interfaces, previous, second.collected_at)
+    assert interfaces["Ethernet 2"]["rx_bytes_per_sec"] == 100
+    assert interfaces["ZeroTier One"]["rx_bytes_per_sec"] == 0
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_windows_memory_exhaustion_and_legacy_metric_names(legacy):
+    text = WINDOWS_TEXT.replace("windows_memory_available_bytes 250", "windows_memory_available_bytes 0")
+    if legacy:
+        text = text.replace("windows_memory_physical_total_bytes", "windows_cs_physical_memory_bytes").replace(
+            "windows_memory_available_bytes", "windows_os_physical_memory_free_bytes"
+        ).replace("windows_system_boot_time_timestamp", "windows_system_system_up_time")
+    metrics = normalize_node_metrics(
+        "windows", "http://windows:9182", text, None,
+        collected_at=datetime.fromtimestamp(87400, tz=timezone.utc),
+    )
+    assert metrics.memory_percent == 100
+    assert metrics.status == "critical"
+    assert metrics.uptime_seconds == 86400
+
+
+def test_windows_uptime_prefers_host_clock_when_available():
+    text = WINDOWS_TEXT + "windows_time_current_timestamp_seconds 87400\n"
+    metrics = normalize_node_metrics("windows", "http://windows:9182", text, None)
+    assert metrics.uptime_seconds == 86400
+
+
+def test_windows_disabled_collectors_leave_gauges_unavailable():
+    metrics = normalize_node_metrics("windows", "http://windows:9182", "windows_exporter_build_info 1\n", None)
+    assert metrics.memory_percent is None
+    assert metrics.cpu_percent is None
+    assert metrics.uptime_seconds is None
+    assert metrics.disks == {}
+
+
+def test_windows_counter_reset_does_not_report_negative_rates():
+    previous = {
+        "collected_at": datetime(2026, 10, 9, tzinfo=timezone.utc),
+        "cpu_totals": {"total": 10000, "busy": 4000},
+        "network_interfaces": {"Ethernet 2": {"rx_bytes_total": 90000, "tx_bytes_total": 80000}},
+    }
+    metrics = normalize_node_metrics(
+        "windows", "http://windows:9182", WINDOWS_TEXT, previous,
+        collected_at=previous["collected_at"] + timedelta(seconds=30),
+    )
+    assert metrics.cpu_percent is None
+    assert metrics.network_rx_bytes_per_sec == 0
+    assert metrics.network_tx_bytes_per_sec == 0
+
+
+def test_linux_cpu_rate_is_preserved():
+    previous = {"cpu_totals": {"total": 100, "busy": 30}}
+    metrics = normalize_node_metrics("linux", "http://linux:9100", PROM_TEXT, previous)
+    assert metrics.cpu_percent == 40

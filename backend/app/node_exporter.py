@@ -105,8 +105,12 @@ def normalize_node_metrics(
 ) -> NormalizedNodeMetrics:
     collected_at = collected_at or datetime.now(timezone.utc)
     metrics = parse_prometheus_text(text)
-    memory_total = _first_value(metrics, "node_memory_MemTotal_bytes")
-    memory_available = _first_value(metrics, "node_memory_MemAvailable_bytes")
+    memory_total = _first_value(
+        metrics, "node_memory_MemTotal_bytes", "windows_memory_physical_total_bytes", "windows_cs_physical_memory_bytes"
+    )
+    memory_available = _first_value(
+        metrics, "node_memory_MemAvailable_bytes", "windows_memory_available_bytes", "windows_os_physical_memory_free_bytes"
+    )
     memory_percent = None
     if memory_total and memory_available is not None:
         memory_percent = round((memory_total - memory_available) / memory_total * 100, 2)
@@ -121,6 +125,12 @@ def normalize_node_metrics(
     boot_time = _first_value(metrics, "node_boot_time_seconds")
     node_time = _first_value(metrics, "node_time_seconds")
     uptime = node_time - boot_time if node_time is not None and boot_time is not None else None
+    if uptime is None:
+        # Both Windows names report a boot timestamp, not elapsed seconds.
+        windows_boot = _first_value(metrics, "windows_system_boot_time_timestamp", "windows_system_system_up_time")
+        if windows_boot is not None:
+            windows_time = _first_value(metrics, "windows_time_current_timestamp_seconds")
+            uptime = max(0.0, (windows_time if windows_time is not None else collected_at.timestamp()) - windows_boot)
     status = _node_status(cpu_percent, memory_percent, disks)
 
     return NormalizedNodeMetrics(
@@ -187,9 +197,12 @@ def _parse_labels(raw: str) -> dict[str, str]:
     return labels
 
 
-def _first_value(metrics: dict[str, list[MetricSample]], name: str) -> float | None:
-    samples = metrics.get(name) or []
-    return samples[0].value if samples else None
+def _first_value(metrics: dict[str, list[MetricSample]], *names: str) -> float | None:
+    for name in names:
+        samples = metrics.get(name) or []
+        if samples:
+            return samples[0].value
+    return None
 
 
 def _parse_disks(metrics: dict[str, list[MetricSample]]) -> dict:
@@ -201,6 +214,15 @@ def _parse_disks(metrics: dict[str, list[MetricSample]]) -> dict:
     for sample in metrics.get("node_filesystem_avail_bytes", []):
         if _is_real_filesystem(sample):
             avails[sample.labels["mountpoint"]] = sample
+    if not sizes:
+        disk_info = {sample.labels.get("volume"): sample.labels for sample in metrics.get("windows_logical_disk_info", [])}
+        for sample in metrics.get("windows_logical_disk_size_bytes", []):
+            volume = sample.labels.get("volume")
+            # Exclude aggregate counters and hidden recovery/system partitions.
+            if volume and re.fullmatch(r"[A-Za-z]:", volume):
+                labels = {"device": volume, "fstype": disk_info.get(volume, {}).get("filesystem")}
+                sizes[volume] = MetricSample(labels=labels, value=sample.value)
+        avails = {sample.labels.get("volume"): sample for sample in metrics.get("windows_logical_disk_free_bytes", [])}
     disks = {}
     for mount, size_sample in sizes.items():
         avail_sample = avails.get(mount)
@@ -221,9 +243,16 @@ def _parse_disks(metrics: dict[str, list[MetricSample]]) -> dict:
 def _parse_network(metrics: dict[str, list[MetricSample]]) -> dict:
     rx = {sample.labels["device"]: sample.value for sample in metrics.get("node_network_receive_bytes_total", [])}
     tx = {sample.labels["device"]: sample.value for sample in metrics.get("node_network_transmit_bytes_total", [])}
+    windows_network = not rx and "windows_net_bytes_received_total" in metrics
+    if windows_network:
+        rx = {sample.labels["nic"]: sample.value for sample in metrics["windows_net_bytes_received_total"]}
+        tx = {sample.labels["nic"]: sample.value for sample in metrics.get("windows_net_bytes_sent_total", [])}
     interfaces = {}
     for device, rx_value in rx.items():
-        if _is_ignored_interface(device):
+        if windows_network:
+            if device == "_Total" or "loopback" in device.lower():
+                continue
+        elif _is_ignored_interface(device):
             continue
         interfaces[device] = {
             "rx_bytes_total": rx_value,
@@ -260,7 +289,7 @@ def _cpu_percent(metrics: dict[str, list[MetricSample]], previous: dict | None) 
     previous_totals = previous["cpu_totals"]
     total_delta = current["total"] - previous_totals.get("total", 0.0)
     busy_delta = current["busy"] - previous_totals.get("busy", 0.0)
-    if total_delta <= 0:
+    if previous_totals.get("total", 0.0) <= 0 or total_delta <= 0 or busy_delta < 0 or busy_delta > total_delta:
         return None
     return round(max(0.0, min(100.0, busy_delta / total_delta * 100)), 2)
 
@@ -271,9 +300,17 @@ def cpu_totals_from_text(text: str) -> dict[str, float]:
 
 def _cpu_totals(metrics: dict[str, list[MetricSample]]) -> dict[str, float]:
     idle_modes = {"idle", "iowait", "steal"}
+    samples = metrics.get("node_cpu_seconds_total", [])
+    if not samples:
+        # DPC and interrupt time are already included in privileged time.
+        samples = [
+            sample for sample in metrics.get("windows_cpu_time_total", [])
+            if sample.labels.get("mode") in {"idle", "user", "privileged"}
+            and not sample.labels.get("core", "").endswith("_Total")
+        ]
     total = 0.0
     busy = 0.0
-    for sample in metrics.get("node_cpu_seconds_total", []):
+    for sample in samples:
         total += sample.value
         if sample.labels.get("mode") not in idle_modes:
             busy += sample.value

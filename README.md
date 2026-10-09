@@ -58,12 +58,22 @@ PULSEBOARD_GPU_MODEL_FILTER=A100
 
 `PULSEBOARD_GPU_MODEL_FILTER` 为空时显示全部GPU；填 `A100` 时只统计和展示名称包含A100的GPU。
 
-### VPS 监控
+### VPS和Windows主机监控
 
 ```env
 PULSEBOARD_NODE_EXPORTERS=vpn-gateway=http://YOUR_VPN_VPS_IP:9100,app-server=http://YOUR_APP_SERVER_IP:9100
 PULSEBOARD_NODE_EXPORTER_INTERVAL_SECONDS=30
 ```
+
+支持Linux `node_exporter`和Windows `windows_exporter`，直接拉取指标，无需部署Prometheus。Windows示例：
+
+```env
+PULSEBOARD_NODE_EXPORTERS=host-monitor=http://10.177.86.80:9182/metrics
+```
+
+已有节点时用逗号追加，保留原有配置。后端必须能访问该地址；跨网络可通过ZeroTier连接。修改配置后重启后端。
+
+Windows支持CPU使用率、物理内存、盘符容量、网卡流量和开机时长，在现有VPS页面展示。CPU和网络速率需等待两次采集；缺失的采集项及Linux专属的load指标保持空值。启用`cpu,memory,logical_disk,net,system`采集项即可，GPU指标仍需单独接入。
 
 流量配额：
 
