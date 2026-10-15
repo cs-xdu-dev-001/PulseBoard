@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -43,6 +43,16 @@ class NodeExporterTarget:
 
 
 @dataclass(frozen=True)
+class NormalizedGpuMetric:
+    gpu_index: int
+    name: str
+    utilization: float | None
+    memory_total_mb: float | None
+    memory_used_mb: float | None
+    engine_time_seconds: float | None
+
+
+@dataclass(frozen=True)
 class NormalizedNodeMetrics:
     name: str
     url: str
@@ -61,6 +71,7 @@ class NormalizedNodeMetrics:
     uptime_seconds: float | None
     total_network_bytes: float
     status: str
+    gpus: list[NormalizedGpuMetric] = field(default_factory=list)
 
 
 def parse_node_exporters(value: str) -> list[NodeExporterTarget]:
@@ -132,6 +143,7 @@ def normalize_node_metrics(
             windows_time = _first_value(metrics, "windows_time_current_timestamp_seconds")
             uptime = max(0.0, (windows_time if windows_time is not None else collected_at.timestamp()) - windows_boot)
     status = _node_status(cpu_percent, memory_percent, disks)
+    gpus = _parse_gpus(metrics, previous, collected_at)
 
     return NormalizedNodeMetrics(
         name=name,
@@ -155,6 +167,7 @@ def normalize_node_metrics(
             if not key.startswith("_")
         ),
         status=status,
+        gpus=gpus,
     )
 
 
@@ -292,6 +305,93 @@ def _cpu_percent(metrics: dict[str, list[MetricSample]], previous: dict | None) 
     if previous_totals.get("total", 0.0) <= 0 or total_delta <= 0 or busy_delta < 0 or busy_delta > total_delta:
         return None
     return round(max(0.0, min(100.0, busy_delta / total_delta * 100)), 2)
+
+
+def _parse_gpus(
+    metrics: dict[str, list[MetricSample]], previous: dict | None, collected_at: datetime
+) -> list[NormalizedGpuMetric]:
+    """Normalize windows_exporter GPU collector metrics.
+
+    The collector exposes GPU identity and memory as gauges, while utilization is
+    derived from the counter ``windows_gpu_engine_time_seconds``. The previous
+    counter values are kept by the node collector so a restart simply produces a
+    missing utilization value for the first sample.
+    """
+    info_samples = metrics.get("windows_gpu_info", [])
+    adapters = metrics.get("windows_gpu_adapter_memory_dedicated_bytes", [])
+    if not info_samples and not adapters:
+        return []
+
+    by_luid_total = {
+        sample.labels.get("luid"): sample.value
+        for sample in metrics.get("windows_gpu_dedicated_video_memory_size_bytes", [])
+        if sample.labels.get("luid")
+    }
+    by_phys: dict[int, dict] = {}
+
+    def ensure_gpu(phys: str | None, labels: dict[str, str]) -> dict | None:
+        if phys is None:
+            return None
+        try:
+            index = int(phys)
+        except ValueError:
+            return None
+        item = by_phys.setdefault(index, {"index": index, "labels": {}})
+        item["labels"].update(labels)
+        return item
+
+    for sample in info_samples:
+        item = ensure_gpu(sample.labels.get("phys"), sample.labels)
+        if item is not None:
+            item["name"] = sample.labels.get("name") or f"GPU {item['index']}"
+
+    for sample in adapters:
+        item = ensure_gpu(sample.labels.get("phys"), sample.labels)
+        if item is not None:
+            item["memory_used_bytes"] = sample.value
+
+    # Some exporter versions expose adapter memory without a physical index.
+    # The LUID-to-physical mapping from windows_gpu_info lets us attach it.
+    for sample in metrics.get("windows_gpu_adapter_memory_committed_bytes", []):
+        item = ensure_gpu(sample.labels.get("phys"), sample.labels)
+        if item is not None and "memory_used_bytes" not in item:
+            item["memory_used_bytes"] = sample.value
+
+    engine_by_phys: dict[int, float] = {}
+    for sample in metrics.get("windows_gpu_engine_time_seconds", []):
+        item = ensure_gpu(sample.labels.get("phys"), sample.labels)
+        if item is None:
+            continue
+        index = item["index"]
+        engine_by_phys[index] = engine_by_phys.get(index, 0.0) + sample.value
+
+    previous_counters = (previous or {}).get("gpu_counters") or {}
+    elapsed = None
+    if previous and previous.get("collected_at"):
+        elapsed = (collected_at - previous["collected_at"]).total_seconds()
+
+    result: list[NormalizedGpuMetric] = []
+    for index, item in sorted(by_phys.items()):
+        labels = item["labels"]
+        luid = labels.get("luid")
+        total_bytes = by_luid_total.get(luid)
+        used_bytes = item.get("memory_used_bytes")
+        current_engine = engine_by_phys.get(index)
+        previous_engine = previous_counters.get(str(index))
+        utilization = None
+        if elapsed and elapsed > 0 and current_engine is not None and previous_engine is not None:
+            utilization = round(max(0.0, min(100.0, (current_engine - previous_engine) / elapsed * 100)), 2)
+        result.append(
+            NormalizedGpuMetric(
+                gpu_index=index,
+                name=item.get("name") or f"GPU {index}",
+                utilization=utilization,
+                memory_total_mb=round(total_bytes / 1024 / 1024, 2) if total_bytes is not None else None,
+                memory_used_mb=round(used_bytes / 1024 / 1024, 2) if used_bytes is not None else None,
+                engine_time_seconds=current_engine,
+            )
+        )
+    return result
 
 
 def cpu_totals_from_text(text: str) -> dict[str, float]:

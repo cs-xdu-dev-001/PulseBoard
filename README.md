@@ -56,7 +56,7 @@ PULSEBOARD_SOURCE_URL=http://YOUR_GPU_API_HOST:PORT/api/latest
 PULSEBOARD_GPU_MODEL_FILTER=A100
 ```
 
-`PULSEBOARD_GPU_MODEL_FILTER` 为空时显示全部GPU；填 `A100` 时只统计和展示名称包含A100的GPU。
+`PULSEBOARD_GPU_MODEL_FILTER` 为空时显示全部实验室GPU；填 `A100` 时只统计和展示名称包含A100的实验室GPU。通过Windows节点采集到的GPU不受此筛选影响。如果只监控Windows节点而没有实验室GPU JSON接口，`PULSEBOARD_SOURCE_URL`可以留空，节点采集仍会运行。
 
 ### VPS和Windows主机监控
 
@@ -73,7 +73,19 @@ PULSEBOARD_NODE_EXPORTERS=host-monitor=http://10.177.86.80:9182/metrics
 
 已有节点时用逗号追加，保留原有配置。后端必须能访问该地址；跨网络可通过ZeroTier连接。修改配置后重启后端。
 
-Windows支持CPU使用率、物理内存、盘符容量、网卡流量和开机时长，在现有VPS页面展示。CPU和网络速率需等待两次采集；缺失的采集项及Linux专属的load指标保持空值。启用`cpu,memory,logical_disk,net,system`采集项即可，GPU指标仍需单独接入。
+Windows支持CPU使用率、物理内存、盘符容量、网卡流量和开机时长，在现有VPS页面展示。CPU和网络速率需等待两次采集；缺失的采集项及Linux专属的load指标保持空值。启用`cpu,memory,logical_disk,net,system,gpu`采集项后，PulseBoard会复用GPU卡片展示Windows显卡的名称、显存和利用率。
+
+Windows Exporter的GPU采集器默认未启用。安装或重启服务时加入`gpu`：
+
+```powershell
+windows_exporter.exe --collectors.enabled=cpu,memory,logical_disk,net,system,gpu
+```
+
+GPU利用率由`windows_gpu_engine_time_seconds`相邻采样计算，首次采样只有显卡信息和显存，等待下一次采集后才会出现利用率。Windows Exporter需支持GPU采集器；可用以下命令检查：
+
+```powershell
+curl.exe http://localhost:9182/metrics | findstr /i "windows_gpu"
+```
 
 流量配额：
 

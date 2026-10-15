@@ -185,6 +185,33 @@ def test_dashboard_current_returns_source_machine_and_gpu_cards():
     assert payload["vps_nodes"][0]["traffic_quota"]["used_gb"] == 71.23
 
 
+def test_dashboard_keeps_windows_gpu_visible_when_lab_gpu_source_is_down():
+    client, session_factory = make_client()
+    seed_dashboard(session_factory)
+
+    with session_factory() as db:
+        source = db.query(DataSource).filter_by(name="lab-gpu").one()
+        source.status = "unreachable"
+        db.add(VpsNode(name="a100", url="http://host-monitor:9182/metrics", status="online"))
+        db.commit()
+
+    payload = client.get("/api/dashboard/current").json()
+
+    assert payload["gpus"][0]["status"] == "available"
+
+
+def test_dashboard_treats_disabled_lab_gpu_source_as_optional(monkeypatch):
+    client, session_factory = make_client()
+    seed_dashboard(session_factory)
+    monkeypatch.setenv("PULSEBOARD_SOURCE_URL", "")
+    get_settings.cache_clear()
+    try:
+        payload = client.get("/api/dashboard/current").json()
+        assert payload["source"]["status"] == "unknown"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_gpu_history_returns_points_for_requested_range():
     client, session_factory = make_client()
     seed_dashboard(session_factory)

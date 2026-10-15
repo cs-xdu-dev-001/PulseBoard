@@ -92,7 +92,7 @@ def dashboard_current(db: Session = Depends(get_db)) -> dict:
     now = datetime.now(timezone.utc)
     source = db.scalar(select(DataSource).where(DataSource.name == "lab-gpu"))
     machines = _current_machines(db, now)
-    gpus = _current_gpus(db, source.status if source else "unknown", now)
+    gpus = _current_gpus(db, _source_status(source), now)
     vps_nodes = _current_vps_nodes(db, now)
     return {
         "source": _source_payload(source),
@@ -114,7 +114,7 @@ def dashboard_current(db: Session = Depends(get_db)) -> dict:
 @router.get("/gpus")
 def list_gpus(db: Session = Depends(get_db)) -> dict:
     source = db.scalar(select(DataSource).where(DataSource.name == "lab-gpu"))
-    return {"gpus": _current_gpus(db, source.status if source else "unknown", datetime.now(timezone.utc))}
+    return {"gpus": _current_gpus(db, _source_status(source), datetime.now(timezone.utc))}
 
 
 @router.get("/machines")
@@ -126,9 +126,10 @@ def list_machines(db: Session = Depends(get_db)) -> dict:
 def gpu_history(range: Literal["1h", "24h"] = Query("1h"), db: Session = Depends(get_db)) -> dict:
     since, until = _range_bounds(range)
     gpus = db.scalars(select(Gpu).join(Machine).order_by(Machine.name, Gpu.gpu_index)).all()
+    node_gpu_machines = set(db.scalars(select(VpsNode.name)).all())
     series = []
     for gpu in gpus:
-        if not _gpu_matches_model_filter(gpu):
+        if gpu.machine.name not in node_gpu_machines and not _gpu_matches_model_filter(gpu):
             continue
         points = db.scalars(
             select(GpuMetric)
@@ -714,11 +715,17 @@ def _source_payload(source: DataSource | None) -> dict:
     if source is None:
         return {"status": "unknown", "consecutive_failures": 0, "last_success_at": None}
     return {
-        "status": source.status,
+        "status": _source_status(source),
         "consecutive_failures": source.consecutive_failures,
         "last_success_at": _iso(source.last_success_at),
         "last_error": source.last_error,
     }
+
+
+def _source_status(source: DataSource | None) -> str:
+    if not get_settings().source_url.strip() or source is None:
+        return "unknown"
+    return source.status
 
 
 def _current_machines(db: Session, until: datetime) -> list[dict]:
@@ -749,9 +756,10 @@ def _current_machines(db: Session, until: datetime) -> list[dict]:
 
 def _current_gpus(db: Session, source_status: str, until: datetime) -> list[dict]:
     gpus = db.scalars(select(Gpu).join(Machine).order_by(Machine.name, Gpu.gpu_index)).all()
+    node_gpu_machines = set(db.scalars(select(VpsNode.name)).all())
     result = []
     for gpu in gpus:
-        if not _gpu_matches_model_filter(gpu):
+        if gpu.machine.name not in node_gpu_machines and not _gpu_matches_model_filter(gpu):
             continue
         latest = db.scalar(
             select(GpuMetric)
@@ -759,7 +767,11 @@ def _current_gpus(db: Session, source_status: str, until: datetime) -> list[dict
             .order_by(desc(GpuMetric.collected_at), desc(GpuMetric.id))
             .limit(1)
         )
-        status = "unknown" if source_status == "unreachable" else gpu.current_status
+        # GPU samples can also come from a Windows node exporter. Keep those
+        # samples visible even when the optional lab-gpu JSON source is down.
+        status = gpu.current_status
+        if source_status != "ok" and gpu.machine.name not in node_gpu_machines:
+            status = "unknown"
         result.append(
             {
                 "id": gpu.id,

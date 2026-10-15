@@ -18,6 +18,8 @@ from app.routes import router
 
 def run_collection_job() -> None:
     settings = get_settings()
+    if not settings.source_url.strip():
+        return
     with SessionLocal() as db:
         collect_once(db, settings)
 

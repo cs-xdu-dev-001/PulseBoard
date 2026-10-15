@@ -184,6 +184,10 @@ windows_net_bytes_sent_total{nic="Loopback Pseudo-Interface 1"} 100000
 windows_net_bytes_received_total{nic="_Total"} 110300
 windows_net_bytes_sent_total{nic="_Total"} 105200
 windows_system_boot_time_timestamp 1000
+windows_gpu_info{luid="LUID0",name="NVIDIA RTX Pro 5000",phys="0"} 1
+windows_gpu_dedicated_video_memory_size_bytes{luid="LUID0"} 80000000000
+windows_gpu_adapter_memory_dedicated_bytes{luid="LUID0",phys="0"} 2000000000
+windows_gpu_engine_time_seconds{luid="LUID0",phys="0",eng="0",engtype="3D",process_id="1"} 20
 """
 
 
@@ -209,6 +213,37 @@ def test_windows_metrics_normalize_memory_disks_network_and_uptime():
     assert metrics.network_rx_bytes_per_sec is None
     assert metrics.load1 is None and metrics.load5 is None and metrics.load15 is None
     assert metrics.status == "online"
+
+
+def test_windows_gpu_metrics_normalize_identity_memory_and_first_counter_sample():
+    metrics = normalize_node_metrics(
+        "host-monitor", "http://windows:9182/metrics", WINDOWS_TEXT, None,
+        collected_at=datetime.fromtimestamp(87400, tz=timezone.utc),
+    )
+
+    assert len(metrics.gpus) == 1
+    gpu = metrics.gpus[0]
+    assert gpu.gpu_index == 0
+    assert gpu.name == "NVIDIA RTX Pro 5000"
+    assert gpu.memory_total_mb == round(80000000000 / 1024 / 1024, 2)
+    assert gpu.memory_used_mb == round(2000000000 / 1024 / 1024, 2)
+    assert gpu.utilization is None
+
+
+def test_windows_gpu_utilization_uses_engine_counter_delta():
+    now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    previous = {
+        "collected_at": now,
+        "gpu_counters": {"0": 20},
+    }
+    text = WINDOWS_TEXT.replace('engtype="3D",process_id="1"} 20', 'engtype="3D",process_id="1"} 50')
+    metrics = normalize_node_metrics(
+        "host-monitor", "http://windows:9182/metrics", text, previous,
+        collected_at=now + timedelta(seconds=60),
+    )
+
+    assert metrics.gpus[0].utilization == 50.0
+    assert metrics.gpus[0].engine_time_seconds == 50
 
 
 def test_windows_rates_use_two_samples_without_double_counting_cpu_modes():

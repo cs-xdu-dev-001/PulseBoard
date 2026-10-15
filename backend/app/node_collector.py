@@ -6,9 +6,18 @@ import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.availability import classify_gpu_status
 from app.config import Settings
-from app.models import VpsMetric, VpsNode
-from app.node_exporter import calculate_traffic_quota, normalize_node_metrics, parse_node_exporters
+from app.models import Gpu, GpuMetric, Machine, MachineMetric, VpsMetric, VpsNode
+from app.node_exporter import (
+    NormalizedNodeMetrics,
+    calculate_traffic_quota,
+    normalize_node_metrics,
+    parse_node_exporters,
+)
+
+
+_GPU_COUNTER_CACHE: dict[str, dict[str, float]] = {}
 
 
 def collect_nodes_once(db: Session, settings: Settings) -> None:
@@ -26,6 +35,7 @@ def collect_node_once(db: Session, settings: Settings, name: str, url: str) -> N
     except Exception as exc:
         node.status = "offline"
         node.last_error = str(exc)
+        _mark_gpu_machine_offline(db, name)
         db.add(
             VpsMetric(
                 node_id=node.id,
@@ -38,7 +48,14 @@ def collect_node_once(db: Session, settings: Settings, name: str, url: str) -> N
         return
 
     previous = previous_metric_payload(db, node.id)
+    previous = previous or {}
+    previous["gpu_counters"] = _GPU_COUNTER_CACHE.get(name, {})
     normalized = normalize_node_metrics(name, url, text, previous, collected_at=collected_at)
+    _GPU_COUNTER_CACHE[name] = {
+        str(gpu.gpu_index): gpu.engine_time_seconds
+        for gpu in normalized.gpus
+        if gpu.engine_time_seconds is not None
+    }
     if name == settings.traffic_quota_node:
         ensure_traffic_period(node, normalized.total_network_bytes, collected_at, settings)
     quota = calculate_traffic_quota(
@@ -54,6 +71,7 @@ def collect_node_once(db: Session, settings: Settings, name: str, url: str) -> N
     node.status = normalized.status
     node.last_seen_at = collected_at
     node.last_error = None
+    _record_gpu_metrics(db, name, collected_at, normalized)
     db.add(
         VpsMetric(
             node_id=node.id,
@@ -109,6 +127,90 @@ def previous_metric_payload(db: Session, node_id: int) -> dict | None:
 def cleanup_old_vps_data(db: Session, retention_days: int, now: datetime) -> None:
     cutoff = now - timedelta(days=retention_days)
     db.execute(delete(VpsMetric).where(VpsMetric.collected_at < cutoff))
+    db.execute(delete(GpuMetric).where(GpuMetric.collected_at < cutoff))
+
+
+def _record_gpu_metrics(
+    db: Session, machine_name: str, collected_at: datetime, normalized: NormalizedNodeMetrics
+) -> None:
+    gpus = normalized.gpus
+    if not gpus:
+        return
+    machine = db.scalar(select(Machine).where(Machine.name == machine_name))
+    if machine is None:
+        machine = Machine(name=machine_name)
+        db.add(machine)
+        db.flush()
+    machine.status = "connected"
+    machine.last_seen_at = collected_at
+    db.add(
+        MachineMetric(
+            machine_id=machine.id,
+            collected_at=collected_at,
+            status="connected",
+            cpu_percent=normalized.cpu_percent,
+            memory_percent=normalized.memory_percent,
+            memory_total_mb=(normalized.memory_total_bytes / 1024 / 1024) if normalized.memory_total_bytes else None,
+            memory_used_mb=(
+                (normalized.memory_total_bytes - normalized.memory_available_bytes) / 1024 / 1024
+                if normalized.memory_total_bytes is not None and normalized.memory_available_bytes is not None
+                else None
+            ),
+            disks=normalized.disks,
+        )
+    )
+
+    for item in gpus:
+        gpu = db.scalar(select(Gpu).where(Gpu.machine_id == machine.id, Gpu.gpu_index == item.gpu_index))
+        if gpu is None:
+            gpu = Gpu(machine_id=machine.id, gpu_index=item.gpu_index, name=item.name)
+            db.add(gpu)
+            db.flush()
+        gpu.name = item.name
+        gpu.memory_total_mb = item.memory_total_mb
+        gpu.last_seen_at = collected_at
+        samples = db.scalars(
+            select(GpuMetric)
+            .where(GpuMetric.gpu_id == gpu.id)
+            .order_by(GpuMetric.collected_at.desc(), GpuMetric.id.desc())
+            .limit(5)
+        ).all()
+        sample_payload = [
+            {
+                "utilization": sample.utilization,
+                "memory_used_mb": sample.memory_used_mb,
+                "memory_total_mb": sample.memory_total_mb,
+            }
+            for sample in reversed(samples)
+        ]
+        sample_payload.append(
+            {
+                "utilization": item.utilization,
+                "memory_used_mb": item.memory_used_mb,
+                "memory_total_mb": item.memory_total_mb,
+            }
+        )
+        status = classify_gpu_status("connected", sample_payload)
+        gpu.current_status = status
+        db.add(
+            GpuMetric(
+                gpu_id=gpu.id,
+                collected_at=collected_at,
+                utilization=item.utilization,
+                memory_total_mb=item.memory_total_mb,
+                memory_used_mb=item.memory_used_mb,
+                status=status,
+            )
+        )
+
+
+def _mark_gpu_machine_offline(db: Session, machine_name: str) -> None:
+    machine = db.scalar(select(Machine).where(Machine.name == machine_name))
+    if machine is None:
+        return
+    machine.status = "disconnected"
+    for gpu in db.scalars(select(Gpu).where(Gpu.machine_id == machine.id)).all():
+        gpu.current_status = "offline"
 
 
 def ensure_traffic_period(node: VpsNode, current_total_bytes: float, now: datetime, settings: Settings) -> None:
