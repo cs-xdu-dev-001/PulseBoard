@@ -75,10 +75,10 @@ PULSEBOARD_NODE_EXPORTERS=host-monitor=http://10.177.86.80:9182/metrics
 
 Windows支持CPU使用率、物理内存、盘符容量、网卡流量和开机时长，在现有VPS页面展示。CPU和网络速率需等待两次采集；缺失的采集项及Linux专属的load指标保持空值。启用`cpu,memory,logical_disk,net,system,gpu`采集项后，PulseBoard会复用GPU卡片展示Windows显卡的名称、显存和利用率。
 
-Windows Exporter的GPU采集器默认未启用。安装或重启服务时加入`gpu`：
+Windows Exporter的GPU采集器默认未启用。先查看现有服务的启动参数或配置文件，再在**原有采集器列表**中追加`gpu`，保留已有的CPU、磁盘、服务等指标。若使用默认采集器，可配置为`[defaults],gpu`。例如直接运行程序时：
 
 ```powershell
-windows_exporter.exe --collectors.enabled=cpu,memory,logical_disk,net,system,gpu
+windows_exporter.exe --collectors.enabled="[defaults],gpu"
 ```
 
 GPU利用率由`windows_gpu_engine_time_seconds`相邻采样计算，首次采样只有显卡信息和显存，等待下一次采集后才会出现利用率。Windows Exporter需支持GPU采集器；可用以下命令检查：
